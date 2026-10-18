@@ -43,5 +43,35 @@
   "start": "0x0032FC8B",
   "observed": true,
   "note": "Indirect-call target observed at runtime; decodes as a function body."
+ },
+ {
+  "start": "0x0006FA20",
+  "observed": true,
+  "note": "Vtable entry at 0x0034B2B8 (static .rdata scan, follows ret/int3 padding); decodes as a function body."
+ },
+ {
+  "start": "0x00070CA0",
+  "observed": true,
+  "note": "Vtable entry at 0x0034B5E8 (static .rdata scan, follows ret/int3 padding); decodes as a function body."
+ },
+ {
+  "start": "0x000A5A70",
+  "observed": true,
+  "note": "Indirect-call target observed at runtime (entering a ride); vtable entry at 0x0034F738; decodes as a function body."
+ },
+ {
+  "start": "0x00196180",
+  "observed": true,
+  "note": "Vtable entry at 0x00360AFC (static .rdata scan, follows ret/int3 padding); decodes as a function body."
+ },
+ {
+  "start": "0x001B5D70",
+  "observed": true,
+  "note": "Vtable entry at 0x003637F8 (static .rdata scan, follows ret/int3 padding); decodes as a function body."
+ },
+ {
+  "start": "0x0024F240",
+  "observed": true,
+  "note": "Indirect-call target observed at runtime (entering a ride); vtable entry at 0x0036E638; decodes as a function body."
  }
 ]

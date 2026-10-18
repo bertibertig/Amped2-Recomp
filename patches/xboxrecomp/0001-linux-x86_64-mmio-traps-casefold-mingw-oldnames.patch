@@ -249,7 +249,7 @@ index c643f72..157256b 100644
      nv2a_combiner.c
  )
 diff --git a/src/kernel/kernel_bridge.c b/src/kernel/kernel_bridge.c
-index 965dd08..a3459d8 100644
+index 965dd08..450fcfb 100644
 --- a/src/kernel/kernel_bridge.c
 +++ b/src/kernel/kernel_bridge.c
 @@ -2566,6 +2566,12 @@ static volatile LONG g_dpc_head, g_dpc_tail;
@@ -282,8 +282,37 @@ index 965dd08..a3459d8 100644
  #define XBOX_NV2A_REG_BASE     0xFD000000u
  #define NV2A_PMC_INTR_0        0x00000100u
  #define NV2A_PMC_INTR_PCRTC    (1u << 24)
-@@ -2720,11 +2729,20 @@ static void kernel_vblank_tick(void)
-     next_ms = now + 16;                       /* ~60 Hz */
+@@ -2703,10 +2712,15 @@ uint32_t xbox_VblankCount(void)
+     return (uint32_t)g_vblank_total;
+ }
+ 
++/* When the next vblank is due (GetTickCount64 ms), for the timer thread's
++ * wait: it used to check every ~10 ms, so vblanks landed 16-20 ms apart
++ * (~55 Hz). */
++static volatile long long g_vblank_next_ms;
++
+ static void kernel_vblank_tick(void)
+ {
+     static int enabled = -1;
+-    static long long next_ms;
++    static double next_ms;
+     long long now;
+ 
+     if (enabled < 0)
+@@ -2715,16 +2729,30 @@ static void kernel_vblank_tick(void)
+         return;
+ 
+     now = (long long)GetTickCount64();
+-    if (now < next_ms)
++    if (now < (long long)next_ms)
+         return;
+-    next_ms = now + 16;                       /* ~60 Hz */
++    /* 60 Hz on average (16.67 ms steps); resync after a stall instead of
++     * firing a burst of late vblanks. */
++    next_ms += 1000.0 / 60.0;
++    if (next_ms < (double)now)
++        next_ms = (double)now + 1000.0 / 60.0;
++    g_vblank_next_ms = (long long)next_ms;
      InterlockedIncrement(&g_vblank_total);
  
 +    /* The video overlay latches its pending buffer at the vblank, whether
@@ -305,7 +334,7 @@ index 965dd08..a3459d8 100644
  
      {
          static unsigned n;
-@@ -3019,11 +3037,16 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
+@@ -3019,11 +3047,21 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
          g_fs_base = tib;
      }
  
@@ -316,10 +345,15 @@ index 965dd08..a3459d8 100644
  
 -        Sleep(10);
 +        /* Up to 10 ms, as before, but a queued DPC ends the wait at once. */
-+        if (g_dpc_wake)
-+            WaitForSingleObject(g_dpc_wake, 10);
-+        else
-+            Sleep(10);
++        {
++            /* Until the next vblank, at most 10 ms; a queued DPC ends it. */
++            long long left = g_vblank_next_ms - (long long)GetTickCount64();
++            DWORD wait_ms = left <= 0 ? 0 : left > 10 ? 10 : (DWORD)left;
++            if (g_dpc_wake)
++                WaitForSingleObject(g_dpc_wake, wait_ms);
++            else
++                Sleep(wait_ms ? wait_ms : 1);
++        }
          kernel_vblank_tick();  /* the GPU's frame clock */
          kernel_drain_dpcs();   /* deferred work, before due timers */
          now = (long long)GetTickCount64();
@@ -411,7 +445,7 @@ index 37c3621..f4683ec 100644
          /* As the Win32 backend does: the bridge reads back the host path
           * the call it just made translated (the missing-file report, the
 diff --git a/src/kernel/nv2a_backend.h b/src/kernel/nv2a_backend.h
-index 327f01d..caeb766 100644
+index 327f01d..c5e3e4e 100644
 --- a/src/kernel/nv2a_backend.h
 +++ b/src/kernel/nv2a_backend.h
 @@ -20,15 +20,21 @@
@@ -484,6 +518,35 @@ index 327f01d..caeb766 100644
  } Nv2aBatch;
  
  typedef struct {
+@@ -96,6 +126,10 @@ typedef struct {
+                   uint32_t flags, uint32_t argb, uint32_t zstencil);
+     void (*draw)(const Nv2aSurface *s, const Nv2aBatch *b);
+     void (*flip)(void);
++    /* Optional (may be NULL): called on the same thread every round of the
++     * NV2A poll loop, flip or not. A back end presents what changes without a
++     * flip here -- the video overlay (nv2a_overlay.h): XMV movies never flip. */
++    void (*idle)(void);
+ } Nv2aBackend;
+ 
+ /* Register (or, with NULL, remove) the back end. Call before the title starts
+diff --git a/src/kernel/nv2a_combiner.h b/src/kernel/nv2a_combiner.h
+index 8abfc5f..88a9108 100644
+--- a/src/kernel/nv2a_combiner.h
++++ b/src/kernel/nv2a_combiner.h
+@@ -27,6 +27,13 @@ typedef struct {
+     uint32_t final_c0, final_c1;            /* SET_SPECULAR_FOG_FACTOR */
+     uint32_t control;                       /* SET_COMBINER_CONTROL */
+     uint32_t stage_program;                 /* SET_SHADER_STAGE_PROGRAM */
++    /* For the dot-product texture modes (PS_TEXTUREMODES_DOT*):
++     * SET_DOT_RGBMAPPING -- how stage 1/2/3 turn their input texel into a
++     * vector (bits 0-3 / 4-7 / 8-11, PS_DOTMAPPING_*), and
++     * SET_SHADER_OTHER_STAGE_INPUT -- which stage feeds stage 2 (bits 16-17)
++     * and stage 3 (bits 20-21); stage 1 always reads stage 0. */
++    uint32_t dot_mapping;
++    uint32_t stage_input;
+ } Nv2aCombiner;
+ 
+ /* One pixel. Colours are r,g,b,a in [0,1]; `fog` is (fog colour, factor).
 diff --git a/src/kernel/nv2a_overlay.c b/src/kernel/nv2a_overlay.c
 new file mode 100644
 index 0000000..b58a8d6
@@ -883,10 +946,47 @@ index 0000000..d4ab713
 +
 +#endif /* NV2A_OVERLAY_H */
 diff --git a/src/kernel/nv2a_pb_exec.c b/src/kernel/nv2a_pb_exec.c
-index 1280565..71b340d 100644
+index 1280565..04fcefb 100644
 --- a/src/kernel/nv2a_pb_exec.c
 +++ b/src/kernel/nv2a_pb_exec.c
-@@ -1894,12 +1894,21 @@ static int s_xf_no_tex;
+@@ -129,6 +129,14 @@ static uint32_t dma_resolve(uint32_t offset)
+      * black straight through the guest heap -- which faulted the title three
+      * frames later on a pointer that had been overwritten, while the real
+      * framebuffer at 0x80A6C000 stayed untouched and the screen stayed black. */
++    /* ...unless the title named this page through MmGetPhysicalAddress for a
++     * heap address: then the number is the heap page, not the window page
++     * the arena handed out under the same number (xbox_PhysNoteRamName --
++     * the APU resolves its scatter-gather lists the same way). Without this a
++     * vertex array the title placed in the heap is read from the window page
++     * that shares its number. */
++    if (offset < XBOX_CONTIG_SIZE && xbox_PhysRamNameMap()[offset >> 12])
++        return offset;
+     if (offset < xbox_ContiguousAllocatedBytes())
+         return XBOX_CONTIG_BASE + offset;
+     if (!surface_hits_image(offset, 1))
+@@ -327,6 +335,7 @@ static struct {
+     Nv2aCombiner rc;
+     int      rc_seen;
+     uint32_t clip_plane_mode;           /* SET_SHADER_CLIP_PLANE_MODE */
++    float    eye_vector[3];             /* SET_EYE_VECTOR (DOT_RFLCT_SPEC_CONST) */
+     uint32_t alpha_test, alpha_func, alpha_ref;
+     uint32_t fog_enable, fog_mode, fog_color;
+     float    fog_param[2];
+@@ -767,6 +776,13 @@ void nv2a_backend_register(const Nv2aBackend *backend)
+     s_backend = backend;
+ }
+ 
++/* Once per round of the NV2A poll loop (xbox_memory_layout.c). */
++void nv2a_pb_backend_idle(void)
++{
++    if (s_backend && s_backend->idle)
++        s_backend->idle();
++}
++
+ static int backend_draws(void)
+ {
+     return s_backend && s_backend->draw;
+@@ -1894,12 +1910,21 @@ static int s_xf_no_tex;
  #define NV_BACKEND_MAX_VERTS (NV_MAX_INDICES * 3)
  static Nv2aVertex *s_bverts;     /* about 5.5 MB: allocated by the first vertex */
  static uint32_t   s_bcount;
@@ -908,7 +1008,7 @@ index 1280565..71b340d 100644
      if (s_bcount + 3 > NV_BACKEND_MAX_VERTS)
          return NULL;
      return &s_bverts[s_bcount];
-@@ -1920,6 +1929,13 @@ static void backend_from_xf(const Nv2aVshOutput *v, Nv2aVertex *o)
+@@ -1920,6 +1945,13 @@ static void backend_from_xf(const Nv2aVshOutput *v, Nv2aVertex *o)
      o->diffuse = pack_color(v->d0);
      o->u = v->tex[0][0] * su;
      o->v = v->tex[0][1] * sv;
@@ -922,7 +1022,7 @@ index 1280565..71b340d 100644
  }
  
  /* `textured`: the batch carried texture coordinates, so the bound texture is
-@@ -1928,8 +1944,10 @@ static void backend_flush(int textured)
+@@ -1928,8 +1960,10 @@ static void backend_flush(int textured)
  {
      Nv2aSurface surf;
      Nv2aRenderState rs;
@@ -934,7 +1034,7 @@ index 1280565..71b340d 100644
  
      if (!s_bcount)
          return;
-@@ -1939,15 +1957,55 @@ static void backend_flush(int textured)
+@@ -1939,15 +1973,55 @@ static void backend_flush(int textured)
      batch.count = s_bcount;
      batch.texture = NULL;
      batch.state = &rs;
@@ -992,7 +1092,193 @@ index 1280565..71b340d 100644
          tex.filter = s_gpu.texs[0].filter;
          batch.texture = &tex;
      }
-@@ -2463,9 +2521,111 @@ static void xf_rows_parallel(const XfTri *T, XfCount *total)
+@@ -2174,40 +2248,78 @@ static void rc_texel(const Texture *t, uint32_t face, float u, float v,
+ 
+ /* What texture stage `st` contributes, by its SHADER_STAGE_PROGRAM mode
+  * (xemu psh.c). Returns 0 when a clip-plane stage kills the pixel. */
+-static int rc_stage_fetch(int st, const float c[4], float out[4])
++/* A cube-map lookup by direction (xemu psh.c / the GL cube rules). A texture
++ * that is not a cube map reads (x, y) as 2D. */
++static void rc_cube_fetch(const Texture *t, float x, float y, float z, float out[4])
++{
++    float ax = fabsf(x), ay = fabsf(y), az = fabsf(z), ma, sc, tc;
++    uint32_t face;
++    if (!t->cube) {
++        rc_texel(t, 0, x, y, out);
++        return;
++    }
++    if (ax >= ay && ax >= az) {
++        face = x > 0 ? 0 : 1; ma = ax; sc = x > 0 ? -z : z; tc = -y;
++    } else if (ay >= az) {
++        face = y > 0 ? 2 : 3; ma = ay; sc = x; tc = y > 0 ? z : -z;
++    } else {
++        face = z > 0 ? 4 : 5; ma = az; sc = z > 0 ? x : -x; tc = -y;
++    }
++    if (ma == 0.0f)
++        ma = 1.0f;
++    rc_texel(t, face * tex_face_stride(t), (sc / ma + 1.0f) * 0.5f,
++             (tc / ma + 1.0f) * 0.5f, out);
++}
++
++/* PS_DOTMAPPING: an input texel's component (0..1) as a vector component
++ * (xemu psh.c sign1/sign2/sign3). The HILO modes read like ZERO_TO_ONE. */
++static float rc_dotmap(uint32_t mapping, float x)
+ {
+-    const Texture *t = &s_gpu.texs[st];
++    float b = x * 255.0f;
++    switch (mapping & 7u) {
++    case 1:  return (b - 128.0f) / 127.0f;                          /* -1..1 D3D */
++    case 2:  return b >= 128.0f ? (b - 255.5f) / 127.5f : (b + 0.5f) / 127.5f; /* GL */
++    case 3:  return b >= 128.0f ? (b - 256.0f) / 127.0f : b / 127.0f;           /* signed */
++    default: return x;                                              /* 0..1 */
++    }
++}
++
++/* Per-pixel state the dot-product modes carry from stage to stage. */
++typedef struct {
++    float dot[4];       /* dot[i]: stage i's dot product */
++    float eye_w[4];     /* stage i's texture coordinate .w (reflection eye) */
++} RcDotState;
++
++/* dot(c.xyz, dotmap(t[input])) for stage st (1..3). */
++static float rc_stage_dot(int st, const float c[4], const float t[4][4])
++{
++    uint32_t in = st == 1 ? 0u
++                : st == 2 ? (s_gpu.rc.stage_input >> 16) & 3u
++                          : (s_gpu.rc.stage_input >> 20) & 3u;
++    uint32_t map = (s_gpu.rc.dot_mapping >> (4 * (st - 1))) & 0xFu;
++    return c[0] * rc_dotmap(map, t[in][0]) + c[1] * rc_dotmap(map, t[in][1])
++         + c[2] * rc_dotmap(map, t[in][2]);
++}
++
++/* Texture stage st with coordinates c; t[] holds the stages before it. */
++static int rc_stage_fetch(int st, const float c[4], float out[4],
++                          const float t[4][4], RcDotState *ds)
++{
++    const Texture *t_st = &s_gpu.texs[st];
+     uint32_t mode = (s_gpu.rc.stage_program >> (st * 5)) & 0x1F, j;
+     float q = c[3] != 0.0f ? c[3] : 1.0f;
+ 
++    ds->eye_w[st] = c[3];
+     switch (mode) {
+     case 0:                                       /* NONE */
+         out[0] = out[1] = out[2] = 0.0f; out[3] = 1.0f;
+         return 1;
+     case 1: case 2:                               /* PROJECT2D / 3D */
+-        rc_texel(t, 0, c[0] / q, c[1] / q, out);
++        rc_texel(t_st, 0, c[0] / q, c[1] / q, out);
+         return 1;
+-    case 3: {                                     /* CUBEMAP */
+-        float x = c[0], y = c[1], z = c[2];
+-        float ax = fabsf(x), ay = fabsf(y), az = fabsf(z), ma, sc, tc;
+-        uint32_t face;
+-        if (!t->cube) {
+-            rc_texel(t, 0, c[0], c[1], out);
+-            return 1;
+-        }
+-        if (ax >= ay && ax >= az) {
+-            face = x > 0 ? 0 : 1; ma = ax; sc = x > 0 ? -z : z; tc = -y;
+-        } else if (ay >= az) {
+-            face = y > 0 ? 2 : 3; ma = ay; sc = x; tc = y > 0 ? z : -z;
+-        } else {
+-            face = z > 0 ? 4 : 5; ma = az; sc = z > 0 ? x : -x; tc = -y;
+-        }
+-        if (ma == 0.0f)
+-            ma = 1.0f;
+-        rc_texel(t, face * tex_face_stride(t), (sc / ma + 1.0f) * 0.5f,
+-                 (tc / ma + 1.0f) * 0.5f, out);
++    case 3:                                       /* CUBEMAP */
++        rc_cube_fetch(t_st, c[0], c[1], c[2], out);
+         return 1;
+-    }
+     case 4:                                       /* PASSTHRU */
+         for (j = 0; j < 4; j++)
+             out[j] = c[j] < 0.0f ? 0.0f : (c[j] > 1.0f ? 1.0f : c[j]);
+@@ -2220,12 +2332,60 @@ static int rc_stage_fetch(int st, const float c[4], float out[4])
+                 return 0;
+         }
+         return 1;
+-    default:
+-        /* ponytail: bump-env and dot-product modes read zero; they are water
+-         * and bump effects -- add them when a title's look depends on one. */
++    /* The dot-product modes (xemu psh.c): stages 1-2 (and 3) take
++     * dot(texcoord.xyz, dotmap(input texel)); the last stage of the chain
++     * looks a texture up with the accumulated vector. The stages that only
++     * compute a dot product output zero. Amped 2 lights its riders with
++     * DOT_PRODUCT x2 + DOT_STR_CUBE (a normal map into a lighting cube) and
++     * adds DOT_RFLCT_SPEC for the gloss. */
++    case 0x09:                                    /* DOT_ST (stage 2) */
++        if (st < 1) break;
++        ds->dot[st] = rc_stage_dot(st, c, t);
++        rc_texel(t_st, 0, ds->dot[1], ds->dot[2], out);
++        return 1;
++    case 0x0A:                                    /* DOT_ZW: depth replace */
++    case 0x11:                                    /* DOT_PRODUCT */
++        if (st < 1) break;
++        ds->dot[st] = rc_stage_dot(st, c, t);
+         out[0] = out[1] = out[2] = out[3] = 0.0f;
+         return 1;
++    case 0x0D:                                    /* DOT_STR_3D (as 2D) */
++        if (st < 1) break;
++        ds->dot[st] = rc_stage_dot(st, c, t);
++        rc_texel(t_st, 0, ds->dot[1], ds->dot[2], out);
++        return 1;
++    case 0x0E:                                    /* DOT_STR_CUBE */
++        if (st < 1) break;
++        ds->dot[st] = rc_stage_dot(st, c, t);
++        rc_cube_fetch(t_st, ds->dot[1], ds->dot[2], ds->dot[3], out);
++        return 1;
++    case 0x0C: case 0x12: {                       /* DOT_RFLCT_SPEC(_CONST) */
++        float n[3], e[3], nn, ne, r[3];
++        if (st < 1) break;
++        ds->dot[st] = rc_stage_dot(st, c, t);
++        n[0] = ds->dot[1]; n[1] = ds->dot[2]; n[2] = ds->dot[3];
++        if (mode == 0x0C) {
++            e[0] = ds->eye_w[1]; e[1] = ds->eye_w[2]; e[2] = ds->eye_w[3];
++        } else {
++            e[0] = s_gpu.eye_vector[0]; e[1] = s_gpu.eye_vector[1];
++            e[2] = s_gpu.eye_vector[2];
++        }
++        nn = n[0] * n[0] + n[1] * n[1] + n[2] * n[2];
++        ne = n[0] * e[0] + n[1] * e[1] + n[2] * e[2];
++        if (nn == 0.0f)
++            nn = 1.0f;
++        for (j = 0; j < 3; j++)
++            r[j] = 2.0f * n[j] * ne / nn - e[j];
++        rc_cube_fetch(t_st, r[0], r[1], r[2], out);
++        return 1;
+     }
++    default:
++        break;
++    }
++    /* ponytail: bump-env and DOT_RFLCT_DIFF read zero; add them when a
++     * title's look depends on one. */
++    out[0] = out[1] = out[2] = out[3] = 0.0f;
++    return 1;
+ }
+ 
+ /* The fixed-function fog unit, per vertex, from the program's oFog.x
+@@ -2321,7 +2481,9 @@ static void xf_rows(const XfTri *T, int y0, int step, XfCount *cnt)
+                     pw = l0 * T->iw[0] + l1 * T->iw[1] + l2 * T->iw[2];
+                     if (T->use_rc) {
+                         float d1[4], fog[4], t[4][4], out[4], tc[4];
++                        RcDotState ds;
+                         int st, j, keep = 1;
++                        memset(&ds, 0, sizeof ds);
+                         for (k = 0; k < 4; k++)
+                             d1[k] = l0 * va->d1[k] + l1 * vb->d1[k] + l2 * vc->d1[k];
+                         fog[0] = T->fogc[0]; fog[1] = T->fogc[1]; fog[2] = T->fogc[2];
+@@ -2335,7 +2497,8 @@ static void xf_rows(const XfTri *T, int y0, int step, XfCount *cnt)
+                             for (j = 0; j < 4; j++)
+                                 tc[j] = (l0 * T->stc[0][st][j] + l1 * T->stc[1][st][j]
+                                        + l2 * T->stc[2][st][j]) / pw;
+-                            keep = rc_stage_fetch(st, tc, t[st]);
++                            keep = rc_stage_fetch(st, tc, t[st],
++                                                  (const float (*)[4])t, &ds);
+                         }
+                         if (!keep)
+                             continue;
+@@ -2463,9 +2626,111 @@ static void xf_rows_parallel(const XfTri *T, XfCount *total)
      }
  }
  #else
@@ -1105,7 +1391,7 @@ index 1280565..71b340d 100644
  }
  #endif
  
-@@ -2684,8 +2844,21 @@ static int transform_vertex(uint32_t index, Nv2aVshOutput *out)
+@@ -2684,8 +2949,21 @@ static int transform_vertex(uint32_t index, Nv2aVshOutput *out)
  
      if (!batch_uses_program())
          return ffp_vertex(index, out);
@@ -1129,7 +1415,7 @@ index 1280565..71b340d 100644
      if (!nv2a_vsh_run((const float (*)[4])in, out))
          return 0;
      /* oPos.w == 0 comes from a program that never divided by w: x, y and z
-@@ -2721,15 +2894,40 @@ static void xf_set_viewport(void)
+@@ -2721,15 +2999,40 @@ static void xf_set_viewport(void)
      s_xf_o[2] = of[2];
  }
  
@@ -1172,7 +1458,7 @@ index 1280565..71b340d 100644
      xf_set_viewport();
      {
          const VertexAttr *tc = texcoord_attr();
-@@ -2781,13 +2979,20 @@ static void raster_batch_program(void)
+@@ -2781,13 +3084,20 @@ static void raster_batch_program(void)
          /* RECOMP_VSH_TRACE=<n>: print n program batches -- attribute setup,
           * raw inputs, key constants, and what came out. */
          static int left = -1;
@@ -1196,7 +1482,63 @@ index 1280565..71b340d 100644
              float in[4];
              left--;
              fprintf(stderr, "[VTRACE] prim %u n %u idx %u %u %u\n", s_gpu.prim,
-@@ -4087,10 +4292,15 @@ void nv2a_pb_exec_report(void)
+@@ -3602,6 +3912,8 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
+         s_gpu.rc_seen = 1;
+         break;
+     case 0x1E70: s_gpu.rc.stage_program = param; break;
++    case 0x1E74: s_gpu.rc.dot_mapping = param; break;   /* SET_DOT_RGBMAPPING */
++    case 0x1E78: s_gpu.rc.stage_input = param; break;   /* SET_SHADER_OTHER_STAGE_INPUT */
+     case 0x17F8: s_gpu.clip_plane_mode = param; break;
+ 
+     /* Alpha test and fog. */
+@@ -3711,6 +4023,13 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
+         }
+         break;
+ 
++    case 0x181C: case 0x1820: case 0x1824: { /* SET_EYE_VECTOR x, y, z */
++        union { uint32_t u; float f; } cv;
++        cv.u = param;
++        s_gpu.eye_vector[(method - 0x181C) / 4] = cv.f;
++        break;
++    }
++
+     case 0x1808:                            /* ARRAY_ELEMENT32: one index */
+         if (s_gpu.prim && s_gpu.idx_count < NV_MAX_INDICES)
+             s_gpu.idx[s_gpu.idx_count++] = param;
+@@ -3745,7 +4064,31 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
+             fprintf(stderr, "[FTRACE] FLIP_STALL presenting %08X (color now %08X)%c",
+                     s_gpu.drawn_offset, s_gpu.color_offset, 10);
+         /* The stall ends when the buffer being read is the one just finished.
+-         * There is no scanout here to wait for, so that is now. */
++         * There is no scanout here to wait for, so that is now -- unless
++         * RECOMP_FLIP_VSYNC=1: then, as the hardware does at presentation
++         * interval one, the flip waits for the next vblank. A title that does
++         * not wait for the vblank itself (Amped 2) otherwise flips as fast as
++         * the back end draws (~300 fps on the Vulkan back end); one that does
++         * (SSX 3, BlockUntilVerticalBlank) keeps the default. */
++        {
++            static int vsync = -1;
++            if (vsync < 0) {
++                const char *e = getenv("RECOMP_FLIP_VSYNC");
++                vsync = e && *e == '1';
++            }
++            if (vsync) {
++                extern uint32_t xbox_VblankCount(void);
++                uint32_t v0 = xbox_VblankCount();
++                DWORD t0 = GetTickCount();
++                while (xbox_VblankCount() == v0 && GetTickCount() - t0 < 50) {
++#ifdef _WIN32
++                    Sleep(0);   /* Sleep(1) can oversleep a 15.6 ms tick */
++#else
++                    Sleep(1);
++#endif
++                }
++            }
++        }
+         s_gpu.flip_read = s_gpu.flip_write;
+         /* And this is a completed swap, which is what a title's own swap
+          * counter counts -- see xbox_Nv2aFrameCounterFlip. */
+@@ -4087,10 +4430,15 @@ void nv2a_pb_exec_report(void)
      int i, j;
  
      {
@@ -1488,7 +1830,7 @@ index 8acb0af..c7a266b 100644
  /* Run the program from the start slot on one vertex. Inputs are the ten
   * attribute values as floats. Returns 0 if there is no program to run (no
 diff --git a/src/kernel/xbox_memory_layout.c b/src/kernel/xbox_memory_layout.c
-index 362cefe..ef21fbe 100644
+index 362cefe..88d1a5a 100644
 --- a/src/kernel/xbox_memory_layout.c
 +++ b/src/kernel/xbox_memory_layout.c
 @@ -655,8 +655,22 @@ static LONG CALLBACK ac97_write_veh(PEXCEPTION_POINTERS ep)
@@ -1681,11 +2023,16 @@ index 362cefe..ef21fbe 100644
          }
      }
  }
-@@ -1562,7 +1660,41 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
+@@ -1562,7 +1660,46 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
          *(volatile uint32_t *)((uintptr_t)(XBOX_KERNEL_DATA_BASE + KDATA_TICK_COUNT)
                                 + g_memory_offset) = GetTickCount();
  
 -        Sleep(0);  /* yield; the waiter is spinning on another core */
++        {
++            extern void nv2a_pb_backend_idle(void);
++            nv2a_pb_backend_idle();       /* e.g. present a new overlay frame */
++        }
++
 +        /* Yield while the GPU is being fed -- the title's D3D spins on
 +         * another core for the bits cleared above -- but back off once the
 +         * pushbuffer has been quiet for a while. A bare Sleep(0) loop kept

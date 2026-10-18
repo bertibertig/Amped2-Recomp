@@ -263,6 +263,22 @@ _(date – what was done, what was found, next step)_
   - Reached: legal/ESRB screen and the title "PRESS START TO BEGIN", correct in the CPU rasteriser at ~6 fps.
     Profile: ~80 % rasteriser (sample_tex, xf_rows, nv2a_rc_eval, read_rgb, blending), the rest D3D spins waiting
     for it → the Vulkan back end is next. XPP callback `0x0032FC8B` seeded (9 seeds; needs a disasm run).
+- 2026-10-18 – **Vulkan back end, 60 fps, main menu.**
+  - `src/render/` and the Vulkan-Headers/volk submodules (same commits) taken over from SSX3-Recomp with `AMPED2_*`
+    names; `AMPED2_RENDERER=vulkan` is the default in `run.sh` (`=cpu` keeps the CPU rasteriser as the reference).
+    Details: `docs/vulkan-backend.md` → "Amped 2".
+  - Video overlay in Vulkan: overlay image composed at every present; new optional `idle` callback in `Nv2aBackend`
+    (runtime patch) presents new overlay frames between flips. Checked with the Mesa screenshot layer: the intro shows.
+  - Frame pacing: on the GPU the title flipped ~300×/s – Amped 2 relies on FLIP_STALL waiting for the vblank. New
+    `RECOMP_FLIP_VSYNC=1` (default in `run.sh`). Then ~55 fps, because the timer thread checked the vblank every
+    ≤10 ms; it now waits exactly until the next vblank (16.67 ms average, resync after stalls) → **60 fps** in the menus.
+  - Seed `0x0032FC8B` (XPP callback; 9 seeds, pipeline 22:47 min): live input now also arrives on the Vulkan run with a
+    real pad connected (pad reports were no longer requested after that ICALL failure).
+  - Reached with `AMPED2_SKIP_INTRO=1` + `scripts/press.sh start ×3, a`: legal → title → **Choose a Look → Main Menu →
+    Career → RIDE! (Millicent 1)**. Vulkan frames match the CPU reference.
+  - **Open: the 3D rider model in the menus** is a black silhouette with a wrongly textured head – identical in the
+    CPU rasteriser, so it is the shared executor path (vertex program / texture coordinates / lighting), not Vulkan.
+    Textures in use are DXT1/DXT5/A8R8G8B8 only (no palettes). Next: VSH trace of those batches, xemu comparison.
 - 2026-10-18 – **Controls: keyboard and game controllers.**
   - State before: the runtime keyboard pad (`RECOMP_KEYBOARD=1`) and `src/input/host_pad.c` (SSX3's pad code) were in
     place. Checked under Xvfb with `xdotool` key events into the Vulkan window (`SDL_VIDEODRIVER=x11`,
@@ -288,3 +304,30 @@ _(date – what was done, what was found, next step)_
   - Lesson: `pkill -f amped2_recomp` / `pgrep -f <pattern>` inside a Bash tool call match the tool's own shell (its
     command line contains the pattern) and kill it – use PIDs. Two sessions sharing `logs/pad_live.txt` drive each
     other's game: give a second instance its own `RECOMP_PAD_LIVE`.
+- 2026-10-18 – **Rider model in the menus (partly fixed).**
+  - Black rider: its base pass uses the **dot-product texture shaders** – stage program `0x74621` = stage 0 2D,
+    stages 1-2 `DOT_PRODUCT`, stage 3 `DOT_STR_CUBE` (normal map → lighting cube map); the gloss pass `0x64621` ends in
+    `DOT_RFLCT_SPEC`. The executor read zero for every dot mode, so the combiner output (`t3 × c0`) was black and the
+    light pass (`DST_COLOR × tex1`) multiplied black. Runtime patch: `SET_DOT_RGBMAPPING` (0x1E74),
+    `SET_SHADER_OTHER_STAGE_INPUT` (0x1E78) and `SET_EYE_VECTOR` (0x181C) are tracked; `rc_stage_fetch` implements
+    DOT_PRODUCT, DOT_ZW, DOT_ST, DOT_STR_3D (as 2D), DOT_STR_CUBE, DOT_RFLCT_SPEC(_CONST) after xemu's psh.c (dot
+    mappings sign1/2/3). **CPU path: pants, shoes and head now textured and lit correctly.** Vulkan path still draws
+    them black: the shader (`nv2a.frag`) needs the same modes and the back end real cube maps (it samples face 0).
+  - The light pass itself is fine: its 1×1 texture (`0x8121A680`) is white, the combiner is `tex1 × dot(tex0, luma)`.
+  - **Fence**: the SSX 3 fence mirror is gone. `src/recomp_manual.c` replaces D3D_BlockOnTime (`0x0031E7E0`) as the
+    toolkit's d3d8ltcg-device-context.md describes: the executor writes the real semaphore (`device+0x30`,
+    `nv2a_pb_set_semaphore_target`), the wait kicks off the newest fence first (`FUN_0031E5A0(0)`) and is bounded at
+    250 ms. Log: `[D3D] GPU semaphore at 0x8070A000`. Menus still run at ~50-60 fps on Vulkan.
+  - `dma_resolve` (runtime patch) now resolves pages the title named through `MmGetPhysicalAddress` for a heap
+    address as RAM, like the APU already does (`xbox_PhysRamNameMap`) – heap VA and contiguous physical numbers
+    overlap in the runtime.
+  - **Still open: the rider's upper body (jacket, arms) is missing**, and the head has no base pass. Ruled out: the
+    renderer (same in CPU and Vulkan), FFP batches (none in the menus), missing/partial data (`z:\CharWad\CharWad.bdr`
+    is optional – the game falls back to `MedHiResCharacter.gfx`; the `z:` cache matches the disc;
+    `u:\<profile>\<profile>.res` is also missing but optional?). A method trace of a whole frame shows 37
+    SET_BEGIN_END pairs and 37 drawn batches: **the game never submits those draws**, so the cause is upstream
+    (game logic / data), not in the executor. Our profile is a new one ("Player1"); the xemu reference shows a saved
+    profile (Sasha) – compare with a fresh profile in xemu next. ~15 of 1300 traced batches read freed memory
+    (`0xFDFDFDFD`) even with the real semaphore (0x82252080, a model block loaded via zlib and freed later).
+  - Note: the runtime's save root `~/.local/share/xboxrecomp` (TDATA/UDATA/Cache = `z:`) is shared with SSX3-Recomp;
+    titles are separated by title ID in TDATA/UDATA, but `Cache` (`z:`) is common to both ports.

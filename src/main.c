@@ -66,6 +66,10 @@
 /* xboxrecomp runtime headers */
 #include <xbox/xboxrecomp.h>
 
+#if defined(AMPED2_HAVE_VULKAN)
+#include "render/vk_backend.h"
+#endif
+
 
 /*
  * If xboxrecomp.h is not an umbrella header in your setup, include
@@ -534,7 +538,24 @@ static int boot_and_run(void)
      *   device+0x30  pointer to the GPU-written fence word
      * Mirrors submitted into consumed ("always caught up"), as SSX3-Recomp
      * does alongside the executor. */
-    xbox_Nv2aMirrorFence(0x0032CEF8, 0x2C, 0x30);
+    /* No fence mirror any more: with the executor running, "always caught
+     * up" let D3D free vertex memory before it was drawn. The fence wait is
+     * replaced in src/recomp_manual.c (sub_0031E7E0) and the executor writes
+     * the real semaphore. */
+
+    /* Step 5b': Render back end.
+     *
+     * AMPED2_RENDERER=vulkan (the default in scripts/run.sh) hands the
+     * executor's decoded draws to the GPU (src/render/vk_backend.c) instead of
+     * its CPU rasteriser; the back end opens its own window. Unset / "cpu":
+     * the CPU rasteriser, kept as the reference. */
+#if defined(AMPED2_HAVE_VULKAN)
+    {
+        const char *renderer = getenv("AMPED2_RENDERER");
+        if (renderer && strcmp(renderer, "vulkan") == 0)
+            amped2_vk_register();
+    }
+#endif
 
     /* Step 5c: USB controllers (pads).
      *
@@ -711,6 +732,15 @@ int main(int argc, char **argv)
     install_posix_fault_handler();
     if (boot_memory() != 0)
         return 1;
+#if defined(AMPED2_HAVE_VULKAN)
+    {
+        /* The Vulkan renderer owns the window: opened here on the main thread,
+         * pumped from the start (the guest runs on its own thread). */
+        const char *renderer = getenv("AMPED2_RENDERER");
+        if (renderer && strcmp(renderer, "vulkan") == 0)
+            return amped2_vk_host_main(boot_and_run);
+    }
+#endif
     return xbox_HostWindowMain(boot_and_run);
 }
 #endif

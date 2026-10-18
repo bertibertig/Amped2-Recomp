@@ -7,8 +7,13 @@
 #   RECOMP_VBLANK=1         60 Hz VBlank interrupt; D3D_BlockUntilVerticalBlank waits for it
 #   RECOMP_AC97_READY=1     AC'97 codec ready + emulated APU; without it DirectSoundCreate fails
 #   RECOMP_PB_EXEC=1        decode/execute the NV2A pushbuffer – otherwise no picture
-#   RECOMP_FB_WINDOW=1      framebuffer window (SDL2) for the CPU rasteriser
+#   AMPED2_RENDERER=vulkan  GPU renderer (src/render, own window) – default here
+#   AMPED2_RENDERER=cpu     the executor's software rasteriser + framebuffer window, kept as the reference
+#   AMPED2_VK_DUMP=<prefix> BMP dumps of the Vulkan frames (AMPED2_VK_DUMP_EVERY=n); RECOMP_FB_DUMP for the CPU path
+#   RECOMP_FB_WINDOW=1      framebuffer window (SDL2) – set automatically for AMPED2_RENDERER=cpu
 #   RECOMP_RASTER_THREADS=n rasteriser worker threads (default: CPUs-4, POSIX pool from the runtime patch)
+#   RECOMP_FLIP_VSYNC=1     a flip waits for the next vblank (presentation interval 1) – without it the game flips
+#                           as fast as the renderer draws (~300 fps on Vulkan)
 #   RECOMP_HEAP_RECLAIM=1   frees really release memory (heap + contiguous arena). Amped 2 probes the largest free
 #                           contiguous block at boot and frees it again; without this it keeps ~47 MB for good and
 #                           XACT/USB allocations fail -> the game launches its error screen Boom.xbe
@@ -29,7 +34,13 @@ export RECOMP_VBLANK="${RECOMP_VBLANK:-1}"
 export RECOMP_AC97_READY="${RECOMP_AC97_READY:-1}"
 export RECOMP_HEAP_RECLAIM="${RECOMP_HEAP_RECLAIM:-1}"
 export RECOMP_PB_EXEC="${RECOMP_PB_EXEC:-1}"
-export RECOMP_FB_WINDOW="${RECOMP_FB_WINDOW:-1}"
+export RECOMP_FLIP_VSYNC="${RECOMP_FLIP_VSYNC:-1}"    # flips wait for the vblank (Amped 2 does not wait itself)
+export AMPED2_RENDERER="${AMPED2_RENDERER:-vulkan}"
+if [ "$AMPED2_RENDERER" = cpu ]; then
+  export RECOMP_FB_WINDOW="${RECOMP_FB_WINDOW:-1}"    # the CPU rasteriser's window
+else
+  unset RECOMP_FB_WINDOW                              # the Vulkan back end opens its own window
+fi
 export RECOMP_USB="${RECOMP_USB:-1}"
 export RECOMP_KEYBOARD="${RECOMP_KEYBOARD:-1}"
 export AMPED2_SKIP_LOGOS="${AMPED2_SKIP_LOGOS:-1}"   # MGS/XSN logos off (AMPED2_SKIP_INTRO=1: the intro too)

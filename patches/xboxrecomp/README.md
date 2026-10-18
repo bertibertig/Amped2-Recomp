@@ -89,6 +89,16 @@ All of them are candidates for an upstream PR to sp00nznet/xboxrecomp.
 - `src/usb/ohci.c`, `usb_gamepad.c/.h` (`usb_gamepad_output`): **rumble** (from SSX3-Recomp). The emulated pad's OUT
   packets were counted and dropped. Output reports (`00 06 <left u16> <right u16>`) now go to `xbox_InputSetState()`,
   both on interrupt endpoint 2 and as the data stage of a HID SET_REPORT (`21 09`) on the control pipe.
+- `nv2a_backend.h`, `nv2a_pb_exec.c`, `xbox_memory_layout.c`: optional `Nv2aBackend.idle`, called every NV2A poll round
+  (`nv2a_pb_backend_idle`) – a back end presents overlay frames between flips there.
+- `nv2a_pb_exec.c`: `RECOMP_FLIP_VSYNC=1` makes FLIP_STALL wait for the next emulated vblank (presentation interval 1).
+- `kernel_bridge.c`: the vblank runs at exactly 60 Hz (16.67 ms average, resync after stalls) and the timer thread waits
+  until it is due instead of checking every ~10 ms (vblanks used to land 16-20 ms apart).
+- `nv2a_combiner.h`, `nv2a_pb_exec.c`: **dot-product texture shader modes** in the CPU path (DOT_PRODUCT, DOT_ZW,
+  DOT_ST, DOT_STR_3D as 2D, DOT_STR_CUBE, DOT_RFLCT_SPEC(_CONST)); tracks SET_DOT_RGBMAPPING (0x1E74),
+  SET_SHADER_OTHER_STAGE_INPUT (0x1E78) and SET_EYE_VECTOR (0x181C). Bump-env and DOT_RFLCT_DIFF still read zero.
+- `nv2a_pb_exec.c` (`dma_resolve`): a page the title named through MmGetPhysicalAddress for a heap address resolves to
+  RAM, not to the contiguous window page with the same number (as the APU already did).
 
 Verified: Linux build + Windows cross build (MinGW) compile; own decoder test (8 cases, ucontext) green;
 `tools.recomp.test_reserved_idents` green; SSX 3 on Linux reaches the same state as under Proton

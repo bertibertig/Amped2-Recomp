@@ -70,6 +70,79 @@ void sub_00255202(void)
     g_esp += 4;     /* ret */
 }
 
+/* D3D's fence wait (D3D_BlockOnTime, 0x0031E7E0): the fence in eax, a flags
+ * word on the stack, `ret 4`. Replaced as xboxrecomp's
+ * docs/technical/d3d8ltcg-device-context.md describes for titles whose
+ * pushbuffer the executor runs (RECOMP_PB_EXEC).
+ *
+ * Before, main.c mirrored the fence ("the GPU is always caught up"). With the
+ * executor running behind the title, that lets D3D free and reuse vertex
+ * memory and ring space the executor has not walked yet; the toolkit docs
+ * list the symptoms (data drawn as state, objects drawn black). Some menu
+ * batches did read freed blocks (0xFDFDFDFD, the game allocator's free fill,
+ * FUN_000DDC90). Note: the riders' missing upper body is NOT fixed by this --
+ * those batches are never submitted at all (docs/notes.md).
+ *
+ * Now the executor writes the real semaphore (device + 0x30) at every
+ * BACK_END_WRITE_SEMAPHORE_RELEASE, and this waits for it like the original's
+ * spin at 0x0031E901, bounded at 250 ms. Like the original, the newest fence
+ * first kicks off the pushbuffer holding its release (FUN_0031E5A0(0)); the
+ * original's other branch waits for a GPU interrupt the runtime never raises,
+ * which is why the whole function is replaced rather than wrapped.
+ * Device pointer: 0x0032CEF8 (see src/main.c, docs/notes.md). */
+extern void nv2a_pb_set_semaphore_target(uint32_t guest_va);
+extern void sub_0031E5A0(void);
+static double now_sec(void);
+static void host_yield(void);
+
+#define AMPED2_D3D_DEVICE_PTR 0x0032CEF8u
+
+static int fence_passed(uint32_t dev, uint32_t sem, uint32_t fence)
+{
+    uint32_t submitted = MEM32(dev + 0x2C);
+    /* As the original compares: unsigned distances from the newest fence. */
+    return submitted - fence >= submitted - MEM32(sem);
+}
+
+void sub_0031E7E0(void)
+{
+    static uint32_t targeted;
+    uint32_t fence = g_eax;
+    uint32_t dev = MEM32(AMPED2_D3D_DEVICE_PTR);
+    uint32_t sem;
+    double t0;
+
+    if (!dev || !(sem = MEM32(dev + 0x30))) {
+        g_esp += 8;                         /* ret 4 */
+        return;
+    }
+    /* Re-applied on every call: D3D rewrites the field on a device reset. */
+    if (sem != targeted) {
+        nv2a_pb_set_semaphore_target(sem);
+        fprintf(stderr, "[D3D] GPU semaphore at 0x%08X (fence wait replaced)\n", sem);
+        targeted = sem;
+    }
+    if (!fence_passed(dev, sem, fence)) {
+        if (fence == MEM32(dev + 0x2C)) {
+            PUSH32(g_esp, 0);               /* FUN_0031E5A0(0): kick off */
+            PUSH32(g_esp, 0x0031E80Du);
+            sub_0031E5A0();
+        }
+        t0 = now_sec();
+        while (!fence_passed(dev, sem, fence)) {
+            if (now_sec() - t0 > 0.25) {
+                static int warned;
+                if (warned++ < 5)
+                    fprintf(stderr, "[D3D] fence 0x%08X not reached in 250 ms "
+                                    "(semaphore 0x%08X)\n", fence, MEM32(sem));
+                break;
+            }
+            host_yield();
+        }
+    }
+    g_esp += 8;                             /* ret 4 */
+}
+
 /* XNetGetTitleXnAddr (exported stub 0x002BB66E: `mov ecx, [0x0038C238]; jmp
  * 0x002BB570`), DWORD WINAPI XNetGetTitleXnAddr(XNADDR *pxna).
  *
@@ -143,6 +216,17 @@ void sub_00210F60(void)             /* intro */
  * whether a movie lags because the loop asks too rarely or because the
  * decode itself is too slow. */
 extern void sub_002CDE60_gen(void);
+
+static void host_yield(void)
+{
+#ifdef _WIN32
+    extern __declspec(dllimport) void __stdcall Sleep(unsigned long);
+    Sleep(0);
+#else
+    extern int sched_yield(void);
+    sched_yield();
+#endif
+}
 
 static double now_sec(void)
 {

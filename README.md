@@ -21,27 +21,28 @@ It follows the same route as SSX3-Recomp (our SSX 3 port with the same toolkit):
 | Host and input ported from SSX3-Recomp, Linux build (CPU renderer, multi-threaded) | ✅ |
 | Boot: XAPI (media check bypassed), D3D, XACT/WMA audio, XNet offline, splash screen | ✅ |
 | Movies through the NV2A video overlay, real-time (logos, intro) | ✅ |
-| Legal screen, title screen (CPU renderer ~6 fps) | ✅ |
-| Main menu → riding | ⬜ |
-| Vulkan renderer | ⬜ after the CPU path works |
+| Legal screen, title, main menu, career menu, level select | ✅ |
+| Vulkan renderer: 60 fps in the menus (CPU renderer ~6 fps, kept as the reference) | ✅ |
+| 3D rider model in the menus | 🟡 black silhouette |
+| Riding | ⬜ |
 
 Plan and open items: [docs/TODO.md](docs/TODO.md), running log: [docs/notes.md](docs/notes.md).
 
 ## Quick start (Linux)
 
 ```bash
-git clone --recurse-submodules <this-repo>        # or locally: git submodule update --init --recursive
+git clone --recurse-submodules <this-repo>        # or locally: git submodule update --init --recursive (xboxrecomp, Vulkan-Headers, volk)
 cd Amped2-Recomp
 
 scripts/setup.sh                                   # Python venv + capstone, tool check
-bash xboxrecomp/tools/linux/install_deps.sh        # SDL2, libepoxy, OpenSSL, ffmpeg (sudo); Vulkan driver + glslc needed later
+bash xboxrecomp/tools/linux/install_deps.sh        # SDL2, libepoxy, OpenSSL, ffmpeg (sudo); plus a Vulkan driver and glslc
 
 scripts/extract_iso.sh "/path/to/Amped 2 (Xbox).iso"   # or an already extracted disc folder -> game_files/
 scripts/run_pipeline.sh                            # parse, disasm, func_id, abi, recomp -> src/recomp/gen/
 scripts/doctor.sh                                  # bring-up report
 ```
 
-`scripts/run.sh` starts the game (CPU renderer, logos skipped). Useful switches: `AMPED2_SKIP_INTRO=1` (skip the
+`scripts/run.sh` starts the game (Vulkan renderer, logos skipped; `AMPED2_RENDERER=cpu` for the CPU reference). Useful switches: `AMPED2_SKIP_INTRO=1` (skip the
 intro movie too), `AMPED2_SKIP_LOGOS=0` (show the MGS/XSN logos). While it runs, `scripts/press.sh start`
 (or `a`, `down`, `a:400`, `lt+rt` …) sends controller input; the keyboard and game controllers work as well
 (see Controls).

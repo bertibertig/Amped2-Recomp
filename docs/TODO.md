@@ -22,16 +22,23 @@
 - [x] Movies play at full speed (DPC latency fixed in the runtime)
 - [ ] 5.1 multichannel audio: XMV/DirectSound set up 6 mix bins; the APU output is mixed to stereo for now
 - [x] Seed the XPP callbacks 0x0032E3A4, 0x0032EDAB, 0x003306DF
-- [ ] Re-run the pipeline for seed 0x0032FC8B (XPP callback seen in the intro run)
+- [x] Re-run the pipeline for seed 0x0032FC8B (XPP callback seen in the intro run)
 - [x] Xbox Live / XNet: XNetGetTitleXnAddr answers "no network" (more XNet calls may need the same)
 - [x] Splash screen (CPU rasteriser, 12 threads)
 - [x] Logo/intro skip (`AMPED2_SKIP_LOGOS`, `AMPED2_SKIP_INTRO`), live input (`scripts/press.sh`)
 - [x] Legal/ESRB screen, title screen
-- [ ] Main menu → first run on the mountain (needs Start presses; xemu snapshots exist as reference)
-- [ ] Overlay in the Vulkan back end too (nv2a_overlay_compose_xrgb)
+- [x] Main menu, career menu, level select (Vulkan, 60 fps)
+- [x] Dot-product texture shader modes (CPU path): rider pants/shoes/head lit and textured
+- [ ] Dot-product modes + real cube maps in the Vulkan shader/back end (rider still black there)
+- [ ] Rider upper body (jacket, arms) and head base pass never submitted by the game – find out why (compare a fresh profile in xemu)
+- [ ] Per-title save root: `~/.local/share/xboxrecomp/Cache` (z:) is shared with SSX3-Recomp (RECOMP_SAVE_DIR per port?)
+- [ ] First run on the mountain (Millicent 1): entering the Evergreen session crashes – ICALLs 0x000A5A70 and
+      0x0024F240 unresolved, then SIGSEGV in sub_00241910 → seeds
+- [x] Overlay in the Vulkan back end (idle presents between flips)
+- [ ] Colour-keyed overlays in the Vulkan path
 
 ## Next
-- [ ] Vulkan back end from SSX3-Recomp (front end is rasteriser-bound at ~6 fps)
+- [x] Vulkan back end from SSX3-Recomp (60 fps in the menus, frame pacing via RECOMP_FLIP_VSYNC)
 
 ## Input
 - [x] Keyboard as pad 1 (runtime map) + Amped 2 keys (`src/input/amped2_keys.c`: Space = A, U = Y, O = B,

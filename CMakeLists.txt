@@ -109,12 +109,53 @@ else()
     set_target_properties(${PROJECT_NAME} PROPERTIES ENABLE_EXPORTS ON)
 endif()
 
-# ── Render back ends ────────────────────────────────────────
+# ── Vulkan render back end (src/render, docs/vulkan-backend.md) ──
 #
-# For now only the executor's CPU rasteriser (multi-threaded on POSIX through
-# the runtime patch, RECOMP_RASTER_THREADS). The Vulkan back end from
-# SSX3-Recomp (src/render/, AMPED2_RENDERER=vulkan) comes once the CPU path
-# draws the game correctly -- it is the reference to compare against.
+# Vulkan-Headers and volk are pinned submodules under third_party/, so no
+# Vulkan SDK is needed: volk loads libvulkan / vulkan-1.dll at run time.
+# POSIX only for now -- the window comes from SDL2, which the Windows
+# runtime does not use (a Win32 surface is milestone 4). Selected at run
+# time with AMPED2_RENDERER=vulkan.
+option(AMPED2_VULKAN "Build the Vulkan render back end" ON)
+if(AMPED2_VULKAN AND NOT WIN32)
+    set(AMPED2_VK_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/Vulkan-Headers/include)
+    set(AMPED2_VOLK_DIR   ${CMAKE_CURRENT_SOURCE_DIR}/third_party/volk)
+    if(NOT EXISTS ${AMPED2_VK_HEADERS}/vulkan/vulkan_core.h OR NOT EXISTS ${AMPED2_VOLK_DIR}/volk.c)
+        message(FATAL_ERROR "Vulkan submodules missing: git submodule update --init third_party/Vulkan-Headers third_party/volk "
+                            "(or configure with -DAMPED2_VULKAN=OFF)")
+    endif()
+    add_library(amped2_volk STATIC ${AMPED2_VOLK_DIR}/volk.c)
+    target_include_directories(amped2_volk PUBLIC ${AMPED2_VOLK_DIR} ${AMPED2_VK_HEADERS})
+    target_compile_definitions(amped2_volk PUBLIC VK_NO_PROTOTYPES)
+    target_link_libraries(amped2_volk PRIVATE ${CMAKE_DL_LIBS})
+
+    # Shaders: GLSL -> SPIR-V as C initialiser lists, included by vk_backend.c.
+    find_program(AMPED2_GLSLC glslc REQUIRED)
+    set(AMPED2_SHADER_OUT ${CMAKE_CURRENT_BINARY_DIR}/shaders)
+    set(AMPED2_SHADER_INCS)
+    foreach(sh nv2a.vert nv2a.frag)
+        add_custom_command(
+            OUTPUT  ${AMPED2_SHADER_OUT}/${sh}.inc
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${AMPED2_SHADER_OUT}
+            COMMAND ${AMPED2_GLSLC} --target-env=vulkan1.3 -O -mfmt=c
+                    ${CMAKE_CURRENT_SOURCE_DIR}/src/render/shaders/${sh}
+                    -o ${AMPED2_SHADER_OUT}/${sh}.inc
+            DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/render/shaders/${sh}
+            COMMENT "glslc ${sh}")
+        list(APPEND AMPED2_SHADER_INCS ${AMPED2_SHADER_OUT}/${sh}.inc)
+    endforeach()
+    add_custom_target(amped2_shaders DEPENDS ${AMPED2_SHADER_INCS})
+    add_dependencies(${PROJECT_NAME} amped2_shaders)
+
+    find_package(SDL2 REQUIRED)
+    target_sources(${PROJECT_NAME} PRIVATE src/render/vk_backend.c)
+    target_include_directories(${PROJECT_NAME} PRIVATE ${AMPED2_SHADER_OUT})
+    target_include_directories(${PROJECT_NAME} PRIVATE
+        ${XBOXRECOMP_DIR}/src/kernel     # nv2a_backend.h
+        ${XBOXRECOMP_DIR}/src/input)     # keyboard_sdl.h
+    target_link_libraries(${PROJECT_NAME} PRIVATE amped2_volk SDL2::SDL2)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE AMPED2_HAVE_VULKAN=1)
+endif()
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     # Guest memory is read and written through differently typed pointers

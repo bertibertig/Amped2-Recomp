@@ -13,6 +13,7 @@ export RECOMP_TITLE_KEVENTS="${RECOMP_TITLE_KEVENTS:-1}"
 export RECOMP_VBLANK="${RECOMP_VBLANK:-1}"
 export RECOMP_AC97_READY="${RECOMP_AC97_READY:-1}"
 export RECOMP_HEAP_RECLAIM="${RECOMP_HEAP_RECLAIM:-1}"
+export RECOMP_FLIP_VSYNC="${RECOMP_FLIP_VSYNC:-1}"
 export RECOMP_PB_EXEC="${RECOMP_PB_EXEC:-1}"          # execute the pushbuffer (CPU rasteriser) – otherwise no picture
 export RECOMP_FB_WINDOW="${RECOMP_FB_WINDOW:-1}"      # window showing the framebuffer
 export RECOMP_USB="${RECOMP_USB:-1}"                  # emulated USB controller (XPP/OHCI)
