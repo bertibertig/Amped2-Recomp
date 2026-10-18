@@ -1,0 +1,51 @@
+# --- Game data: your own, legally obtained copy. NEVER commit ---
+game_files/*
+!game_files/README.md
+game/
+*.xbe
+*.iso
+*.xiso
+*.xbx
+
+# --- Generated code (produced from your own XBE, contains translated game code) ---
+src/recomp/gen/*
+!src/recomp/gen/.gitkeep
+
+# --- Reference repos (local copies, read-only) ---
+reference/*
+!reference/README.md
+
+# --- Build / Python ---
+build/
+build-win/
+build-*/
+out/
+dist/
+.venv/
+__pycache__/
+*.pyc
+*.o
+*.obj
+*.a
+*.lib
+*.exe
+*.dll
+*.pdb
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+*.log
+stderr*.txt
+
+# --- IDE / OS (.vscode/ is checked in on purpose) ---
+.idea/
+.vs/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+logs/
+
+# Runtime log of the xboxrecomp runtime (written to the working directory)
+xbox_kernel.log

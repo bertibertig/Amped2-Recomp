@@ -1,0 +1,1380 @@
+diff --git a/src/apu/apu_mmio_hook.c b/src/apu/apu_mmio_hook.c
+index 235140f..c223d57 100644
+--- a/src/apu/apu_mmio_hook.c
++++ b/src/apu/apu_mmio_hook.c
+@@ -3,10 +3,17 @@
+  *
+  * Decodes the faulting instruction with the shared trapped-MMIO decoders
+  * (src/platform/mmio_decode.h on x86-64 under a VEH, mmio_decode_a64.h on
+- * POSIX arm64 under SIGBUS/SIGSEGV) and routes reads/writes through the MCPX
+- * APU register handlers.
++ * POSIX arm64 under SIGBUS/SIGSEGV, and mmio_decode.h again on Linux x86-64
++ * under SIGSEGV) and routes reads/writes through the MCPX APU register
++ * handlers.
+  */
+ 
++/* Linux x86-64: mmio_decode.h reads the ucontext's gregs[REG_*], which glibc
++ * only declares under _GNU_SOURCE -- before the first system header. */
++#if defined(__linux__) && !defined(_GNU_SOURCE)
++#define _GNU_SOURCE
++#endif
++
+ #include "apu.h"
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -17,11 +24,13 @@
+  * platform's MMIO hook is active, so define it before the #if guard. */
+ MCPXAPUState *g_apu_state = NULL;
+ 
+-/* Windows: a VEH hands over the CONTEXT. POSIX arm64: a SIGBUS/SIGSEGV
+- * handler hands over the ucontext (apu_hook_handle_mmio_posix, at the end).
+- * x86-64 Linux has no trap yet. */
++/* Windows: a VEH hands over the CONTEXT. POSIX: a SIGBUS/SIGSEGV handler
++ * hands over the ucontext (apu_hook_handle_mmio_posix) -- decoded with the
++ * x86-64 decoder on Linux x86-64, and with the A64 one (at the end) on arm64. */
++#if defined(_WIN32) || (defined(__linux__) && defined(__x86_64__))
+ #if defined(_WIN32)
+ #include <windows.h>
++#endif
+ #include "../platform/mmio_decode.h"
+ 
+ /* APU MMIO base in Xbox VA space */
+@@ -69,9 +78,9 @@ static void apu_mmio_wr(void *dev, uint32_t off, uint64_t v, int size)
+     mcpx_apu_mmio_write((MCPXAPUState *)dev, off, v, (unsigned)size);
+ }
+ 
+-static bool apu_decode_and_handle(PCONTEXT ctx, uint32_t mmio_offset, int is_write)
++static bool apu_decode_and_handle(mmio_ctx_t *ctx, uint32_t mmio_offset, int is_write)
+ {
+-    const uint8_t *ip = (const uint8_t *)ctx->Rip;
++    const uint8_t *ip = (const uint8_t *)(uintptr_t)MMIO_CTX_PC(ctx);
+ 
+     (void)is_write;
+     if (!g_apu_state) return false;
+@@ -82,17 +91,18 @@ static bool apu_decode_and_handle(PCONTEXT ctx, uint32_t mmio_offset, int is_wri
+     g_apu_mmio_decode_fail++;
+     if (g_apu_mmio_decode_fail <= 20) {
+         fprintf(stderr, "[APU] MMIO decode fail at RIP=%p offset=0x%X: %02X %02X %02X %02X %02X %02X\n",
+-                (void*)ctx->Rip, mmio_offset, ip[0], ip[1], ip[2], ip[3], ip[4], ip[5]);
++                (void *)(uintptr_t)MMIO_CTX_PC(ctx), mmio_offset, ip[0], ip[1], ip[2], ip[3], ip[4], ip[5]);
+         fflush(stderr);
+     }
+     return false;
+ }
+ 
+ /* ============================================================
+- * Public API (called from VEH in main.c)
++ * Public API (called from VEH in main.c; on Linux x86-64 from the title's
++ * SIGSEGV handler through xbox_PosixMmioFault)
+  * ============================================================ */
+ 
+-bool apu_hook_handle_mmio(PCONTEXT ctx, uintptr_t fault_addr,
++bool apu_hook_handle_mmio(mmio_ctx_t *ctx, uintptr_t fault_addr,
+                           uint32_t fault_xbox_va, int is_write)
+ {
+     uint32_t mmio_offset = fault_xbox_va - APU_MMIO_BASE;
+@@ -118,7 +128,21 @@ bool apu_hook_handle_mmio(PCONTEXT ctx, uintptr_t fault_addr,
+     return ok;
+ }
+ 
+-#endif /* _WIN32 */
++#if !defined(_WIN32)
++/* Linux x86-64: the POSIX entry point the arm64 hook below also provides.
++ * ucv is the handler's ucontext; is_write is advisory (the decoder reads the
++ * opcode). Not async-signal-safe on the failure path (stdio), as on arm64. */
++bool apu_hook_handle_mmio_posix(void *ucv, uintptr_t fault_addr,
++                                uint32_t fault_xbox_va, int is_write)
++{
++    if (!g_apu_state || fault_xbox_va - APU_MMIO_BASE >= APU_MMIO_SIZE)
++        return false;
++    return apu_hook_handle_mmio((mmio_ctx_t *)ucv, fault_addr, fault_xbox_va,
++                                is_write);
++}
++#endif
++
++#endif /* _WIN32 || Linux x86-64 */
+ 
+ #if !defined(_WIN32) && defined(__aarch64__)
+ /* POSIX arm64: the same hook over sigaction + ucontext, with the A64 decoder
+diff --git a/src/kernel/kernel_bridge.c b/src/kernel/kernel_bridge.c
+index 965dd08..3176c4b 100644
+--- a/src/kernel/kernel_bridge.c
++++ b/src/kernel/kernel_bridge.c
+@@ -2723,8 +2723,13 @@ static void kernel_vblank_tick(void)
+     if (!xbox_GetConnectedInterrupt(NV2A_VECTOR))
+         return;
+ 
+-    BRIDGE_MEM32(XBOX_NV2A_REG_BASE + NV2A_PCRTC_INTR_0) |= NV2A_PCRTC_INTR_VBLANK;
+-    BRIDGE_MEM32(XBOX_NV2A_REG_BASE + NV2A_PMC_INTR_0)   |= NV2A_PMC_INTR_PCRTC;
++    /* Held pending until the title acknowledges it: the ack thread would
++     * otherwise zero the bits before the ISR's DPC reads them (see
++     * xbox_Nv2aRaiseVblank). */
++    if (!xbox_Nv2aRaiseVblank()) {
++        BRIDGE_MEM32(XBOX_NV2A_REG_BASE + NV2A_PCRTC_INTR_0) |= NV2A_PCRTC_INTR_VBLANK;
++        BRIDGE_MEM32(XBOX_NV2A_REG_BASE + NV2A_PMC_INTR_0)   |= NV2A_PMC_INTR_PCRTC;
++    }
+ 
+     {
+         static unsigned n;
+diff --git a/src/kernel/kernel_path.c b/src/kernel/kernel_path.c
+index 37c3621..f4683ec 100644
+--- a/src/kernel/kernel_path.c
++++ b/src/kernel/kernel_path.c
+@@ -645,12 +645,72 @@ translate:
+ #include <sys/types.h>
+ #include <errno.h>
+ #include <fcntl.h>
++#include <dirent.h>
++#include <strings.h>
+ 
+ static char s_game_dir[MAX_PATH];
+ static char s_save_dir[MAX_PATH];
+ static char s_user_dir[MAX_PATH];   /* UDATA/TDATA root: s_save_dir or RECOMP_SAVE_DIR */
+ static BOOL s_initialized = FALSE;
+ 
++/* Xbox file systems are case-insensitive (FATX, and XDVDFS on the disc), and
++ * so is the Win32 backend; a POSIX host file system is not. A title asks for
++ * D:\data\movies\intro_dj.mad and the extracted disc holds Intro_DJ.mad --
++ * SSX 3 does exactly that, and on Linux the intro video was "not found" while
++ * the same build under Proton played it.
++ *
++ * So when the exact host path does not exist, resolve each component after
++ * prefix_len (the game or save directory, which the runtime owns and whose
++ * spelling is right) against its directory, case-insensitively. The first
++ * component with no match ends the walk and the rest is left as given: that
++ * is a file being created, and it keeps the title's spelling. The common
++ * case -- the name already matches -- costs one stat. */
++static void casefold_resolve(char* path, size_t prefix_len)
++{
++    struct stat st;
++    char* comp;
++
++    if (stat(path, &st) == 0 || strlen(path) <= prefix_len)
++        return;
++    comp = path + prefix_len;
++    while (*comp == '/')
++        comp++;
++    while (*comp) {
++        char* slash = strchr(comp, '/');
++        if (slash)
++            *slash = '\0';
++        if (stat(path, &st) != 0) {
++            char* sep = comp - 1;           /* the '/' ending the parent */
++            DIR* d;
++            struct dirent* de;
++            int found = 0;
++
++            *sep = '\0';
++            d = opendir(path[0] ? path : "/");
++            *sep = '/';
++            if (d) {
++                while ((de = readdir(d)) != NULL) {
++                    if (strcasecmp(de->d_name, comp) == 0) {
++                        memcpy(comp, de->d_name, strlen(comp));
++                        found = 1;
++                        break;
++                    }
++                }
++                closedir(d);
++            }
++            if (!found) {
++                if (slash)
++                    *slash = '/';
++                return;
++            }
++        }
++        if (!slash)
++            return;
++        *slash = '/';
++        comp = slash + 1;
++    }
++}
++
+ /* Strip a single trailing '/' (but never the root '/'). */
+ static void strip_trailing_slash(char* s)
+ {
+@@ -868,6 +928,9 @@ translate:
+                 host_path_buf[--n] = '\0';
+         }
+ 
++        casefold_resolve(host_path_buf,
++                         strlen(base_dir) + (sub_dir ? strlen(sub_dir) : 0));
++
+         XBOX_TRACE(XBOX_LOG_PATH, "%s -> %s", xbox_path, host_path_buf);
+         /* As the Win32 backend does: the bridge reads back the host path
+          * the call it just made translated (the missing-file report, the
+diff --git a/src/kernel/nv2a_backend.h b/src/kernel/nv2a_backend.h
+index 327f01d..caeb766 100644
+--- a/src/kernel/nv2a_backend.h
++++ b/src/kernel/nv2a_backend.h
+@@ -20,15 +20,21 @@
+  * so a back end only ever sees surface pixels. Blend, depth, alpha, cull and
+  * stencil state arrive in Nv2aRenderState.
+  *
+- * ponytail: register-combiner state and texture stages 1-3 are not passed on:
+- * a back end sees stage 0 and the diffuse colour. Extend Nv2aBatch when that
+- * matters rather than adding callbacks.
++ * Batches that went through the transform (vertex program or fixed function)
++ * also carry an Nv2aBatchExt: the register-combiner state, all four texture
++ * stages, and per vertex every texture coordinate set, the specular colour
++ * and the fog factor -- what the executor's own rasteriser feeds its
++ * combiners. A back end that ignores it gets the old "stage-0 texel *
++ * diffuse" picture. Screen-space batches have no extension (the CPU path
++ * does not run them through the combiners either).
+  */
+ #ifndef NV2A_BACKEND_H
+ #define NV2A_BACKEND_H
+ 
+ #include <stdint.h>
+ 
++#include "nv2a_combiner.h"
++
+ /* The colour surface being drawn into, in real (anti-aliased) pixels.
+  * aa_sx/aa_sy give the anti-aliasing factor, so width/aa_sx is the logical
+  * size the title thinks it renders at (e.g. 640x480). */
+@@ -44,7 +50,7 @@ typedef struct {
+ typedef struct {
+     uint32_t offset;            /* guest address of texel (0,0) */
+     uint32_t width, height;
+-    uint32_t pitch;             /* linear formats only */
++    uint32_t pitch;             /* linear formats only; 0 for swizzled/DXT */
+     uint32_t color;             /* NV097 colour-format code */
+     uint32_t addr_u, addr_v;    /* NV097 wrap mode per axis (1 wrap, 3 clamp) */
+     /* Mip levels stored after level 0 (the format word's MIPMAP_LEVELS; 1 for
+@@ -82,11 +88,35 @@ typedef struct {
+     uint32_t stencil_write_mask, stencil_fail, stencil_zfail, stencil_zpass;
+ } Nv2aRenderState;
+ 
++/* Per-vertex data beyond Nv2aVertex, parallel to Nv2aBatch.vertices. */
++typedef struct {
++    /* Texture coordinates per stage as the transform produced them (s,t,r,q):
++     * normalised for swizzled/DXT textures, texels for linear ones. The stage
++     * samples at (s/q, t/q) -- q = 0 reads as 1. */
++    float    tex[4][4];
++    uint32_t specular;          /* 0xAARRGGBB (the combiners' v1) */
++    float    fog;               /* fog factor after the fog unit, 1 = no fog */
++} Nv2aVertexExt;
++
++typedef struct {
++    const Nv2aVertexExt *vertices;
++    /* NULL: the title has not programmed the combiners yet; draw stage-0
++     * texel * diffuse as without the extension. */
++    const Nv2aCombiner  *rc;
++    /* What each stage samples when its SHADER_STAGE_PROGRAM mode (rc->
++     * stage_program, 5 bits per stage) reads a texture; NULL when the stage
++     * has nothing usable bound (the CPU path reads white then). */
++    const Nv2aTexture   *textures[4];
++    uint32_t             clip_plane_mode;   /* SET_SHADER_CLIP_PLANE_MODE */
++    uint32_t             fog_color;         /* 0xAARRGGBB */
++} Nv2aBatchExt;
++
+ typedef struct {
+     const Nv2aVertex  *vertices;    /* triangle list: count is a multiple of 3 */
+     uint32_t           count;
+     const Nv2aTexture *texture;     /* NULL: untextured */
+     const Nv2aRenderState *state;
++    const Nv2aBatchExt *ext;        /* NULL: screen-space batch, see above */
+ } Nv2aBatch;
+ 
+ typedef struct {
+diff --git a/src/kernel/nv2a_pb_exec.c b/src/kernel/nv2a_pb_exec.c
+index 1280565..71b340d 100644
+--- a/src/kernel/nv2a_pb_exec.c
++++ b/src/kernel/nv2a_pb_exec.c
+@@ -1894,12 +1894,21 @@ static int s_xf_no_tex;
+ #define NV_BACKEND_MAX_VERTS (NV_MAX_INDICES * 3)
+ static Nv2aVertex *s_bverts;     /* about 5.5 MB: allocated by the first vertex */
+ static uint32_t   s_bcount;
++/* Nv2aBatchExt vertex data, parallel to s_bverts, for transformed batches.
++ * s_bext_used: the batch being collected came through the transform. */
++static Nv2aVertexExt *s_bext;
++static int        s_bext_used;
++
++static float fog_factor(float d);
+ 
+ static Nv2aVertex *backend_slot(void)
+ {
+     if (!s_bverts
+         && !(s_bverts = (Nv2aVertex *)calloc(NV_BACKEND_MAX_VERTS, sizeof *s_bverts)))
+         return NULL;
++    if (!s_bext
++        && !(s_bext = (Nv2aVertexExt *)calloc(NV_BACKEND_MAX_VERTS, sizeof *s_bext)))
++        return NULL;
+     if (s_bcount + 3 > NV_BACKEND_MAX_VERTS)
+         return NULL;
+     return &s_bverts[s_bcount];
+@@ -1920,6 +1929,13 @@ static void backend_from_xf(const Nv2aVshOutput *v, Nv2aVertex *o)
+     o->diffuse = pack_color(v->d0);
+     o->u = v->tex[0][0] * su;
+     o->v = v->tex[0][1] * sv;
++    {
++        Nv2aVertexExt *e = &s_bext[o - s_bverts];
++        memcpy(e->tex, v->tex, sizeof e->tex);
++        e->specular = pack_color(v->d1);
++        e->fog = fog_factor(v->fog[0]);
++        s_bext_used = 1;
++    }
+ }
+ 
+ /* `textured`: the batch carried texture coordinates, so the bound texture is
+@@ -1928,8 +1944,10 @@ static void backend_flush(int textured)
+ {
+     Nv2aSurface surf;
+     Nv2aRenderState rs;
+-    Nv2aTexture tex;
++    Nv2aTexture tex, stex[4];
+     Nv2aBatch batch;
++    Nv2aBatchExt ext;
++    int st;
+ 
+     if (!s_bcount)
+         return;
+@@ -1939,15 +1957,55 @@ static void backend_flush(int textured)
+     batch.count = s_bcount;
+     batch.texture = NULL;
+     batch.state = &rs;
++    batch.ext = NULL;
++    if (s_bext_used) {
++        uint32_t fc = s_gpu.fog_color;
++        memset(&ext, 0, sizeof ext);
++        ext.vertices = s_bext;
++        ext.rc = s_gpu.rc_seen ? &s_gpu.rc : NULL;
++        for (st = 0; st < 4; st++) {
++            const Texture *t = &s_gpu.texs[st];
++            if (!t->valid || !((s_gpu.rc.stage_program >> (st * 5)) & 0x1F))
++                continue;
++            stex[st].offset = t->offset;
++            stex[st].width  = t->width;
++            stex[st].height = t->height;
++            /* Linear or not is the format's call, as everywhere else here: a
++             * swizzled texture keeps whatever pitch the stage last had (SSX 3's
++             * intro video leaves its 640x480 linear one), and a back end that
++             * took pitch != 0 for "linear" scaled the title screen's
++             * coordinates to its corner. */
++            stex[st].pitch  = tex_size_from_format(t->color) ? 0 : t->pitch;
++            stex[st].color  = t->color;
++            stex[st].addr_u = t->addr_u;
++            stex[st].addr_v = t->addr_v;
++            stex[st].levels = stex[st].pitch ? 1 : t->levels;
++            stex[st].filter = t->filter;
++            ext.textures[st] = &stex[st];
++        }
++        ext.clip_plane_mode = s_gpu.clip_plane_mode;
++        /* FOG_COLOR is R in bits 0-7, the reverse of a D3DCOLOR. */
++        ext.fog_color = (fc & 0xFF00FF00u) | ((fc & 0xFF) << 16) | ((fc >> 16) & 0xFF);
++        batch.ext = &ext;
++        s_bext_used = 0;
++    }
++    /* With register combiners in use, a stage whose SHADER_STAGE_PROGRAM
++     * mode is NONE samples nothing -- whatever texture it still has enabled
++     * is left over from an earlier batch (the CPU path gives it 0,0,0,1, see
++     * rc_stage_fetch). SSX 3 draws its title-screen sky that way: vertex
++     * colours only, stage 0 "on" with the snowflake atlas from the frame
++     * before, and a back end that multiplied by it drew the sky black. */
++    if (s_gpu.rc_seen && !(s_gpu.rc.stage_program & 0x1F))
++        textured = 0;
+     if (textured && s_gpu.texs[0].valid) {
+         tex.offset = s_gpu.texs[0].offset;
+         tex.width  = s_gpu.texs[0].width;
+         tex.height = s_gpu.texs[0].height;
+-        tex.pitch  = s_gpu.texs[0].pitch;
++        tex.pitch  = tex_size_from_format(s_gpu.texs[0].color) ? 0 : s_gpu.texs[0].pitch;
+         tex.color  = s_gpu.texs[0].color;
+         tex.addr_u = s_gpu.texs[0].addr_u;
+         tex.addr_v = s_gpu.texs[0].addr_v;
+-        tex.levels = s_gpu.texs[0].pitch ? 1 : s_gpu.texs[0].levels;
++        tex.levels = tex.pitch ? 1 : s_gpu.texs[0].levels;
+         tex.filter = s_gpu.texs[0].filter;
+         batch.texture = &tex;
+     }
+@@ -2463,9 +2521,111 @@ static void xf_rows_parallel(const XfTri *T, XfCount *total)
+     }
+ }
+ #else
++/* The same pool on POSIX hosts, over pthreads.
++ *
++ * It used to exist on Windows only, and every POSIX build rasterised on the
++ * executor thread alone: SSX 3's front end ran at 1.5 fps on Linux and
++ * 7-13 fps under Proton from the same source, with the title's two D3D
++ * threads spinning on the GPU the whole time. Same split as above -- worker
++ * k takes rows miny+k, miny+k+n, ...; the caller takes the last share. A
++ * generation counter under one mutex starts a round, so a worker that is
++ * slow to wake still runs exactly once per triangle. */
++#include <pthread.h>
++#include <unistd.h>
++
++static struct {
++    int n;                                  /* threads incl. the caller */
++    pthread_mutex_t mu;
++    pthread_cond_t go, done;
++    unsigned gen;                           /* bumped once per triangle */
++    int pending;
++    const XfTri *tri;
++    XfCount cnt[NV_RASTER_MAX_THREADS];
++} s_pool = { 0, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER,
++             PTHREAD_COND_INITIALIZER, 0, 0, NULL, {{0, 0, 0}} };
++
++static void *raster_worker(void *arg)
++{
++    int k = (int)(intptr_t)arg;
++    unsigned seen = 0;
++
++    for (;;) {
++        const XfTri *T;
++
++        pthread_mutex_lock(&s_pool.mu);
++        while (s_pool.gen == seen)
++            pthread_cond_wait(&s_pool.go, &s_pool.mu);
++        seen = s_pool.gen;
++        T = s_pool.tri;
++        pthread_mutex_unlock(&s_pool.mu);
++
++        memset(&s_pool.cnt[k], 0, sizeof s_pool.cnt[k]);
++        xf_rows(T, T->miny + k, s_pool.n, &s_pool.cnt[k]);
++
++        pthread_mutex_lock(&s_pool.mu);
++        if (--s_pool.pending == 0)
++            pthread_cond_signal(&s_pool.done);
++        pthread_mutex_unlock(&s_pool.mu);
++    }
++    return NULL;
++}
++
++static int raster_pool_size(void)
++{
++    static int init;
++    if (!init) {
++        const char *e = getenv("RECOMP_RASTER_THREADS");
++        long cpus = sysconf(_SC_NPROCESSORS_ONLN);
++        int n, k;
++        init = 1;
++        n = e ? atoi(e) : (int)cpus - 4;
++        if (n < 1) n = 1;
++        if (n > NV_RASTER_MAX_THREADS) n = NV_RASTER_MAX_THREADS;
++        s_pool.n = 1;
++        for (k = 0; k < n - 1; k++) {
++            pthread_t th;
++            if (pthread_create(&th, NULL, raster_worker,
++                               (void *)(intptr_t)k) != 0)
++                break;
++            pthread_detach(th);
++        }
++        s_pool.n = k + 1;                   /* the workers that started */
++        fprintf(stderr, "  [GPU] rasteriser: %d thread(s)\n", s_pool.n);
++    }
++    return s_pool.n;
++}
++
+ static void xf_rows_parallel(const XfTri *T, XfCount *total)
+ {
+-    xf_rows(T, T->miny, 1, total);
++    int n = raster_pool_size(), k;
++    long px = (long)(T->maxx - T->minx) * (T->maxy - T->miny);
++
++    if (n <= 1 || px < NV_RASTER_MT_MIN_PIXELS || T->maxy - T->miny < n) {
++        xf_rows(T, T->miny, 1, total);
++        return;
++    }
++    pthread_mutex_lock(&s_pool.mu);
++    s_pool.tri = T;
++    s_pool.pending = n - 1;
++    s_pool.gen++;
++    pthread_cond_broadcast(&s_pool.go);
++    pthread_mutex_unlock(&s_pool.mu);
++    {
++        XfCount mine = {0, 0, 0};
++        xf_rows(T, T->miny + (n - 1), n, &mine);
++        pthread_mutex_lock(&s_pool.mu);
++        while (s_pool.pending > 0)
++            pthread_cond_wait(&s_pool.done, &s_pool.mu);
++        pthread_mutex_unlock(&s_pool.mu);
++        total->depth_fail += mine.depth_fail;
++        total->pixels += mine.pixels;
++        total->zpass += mine.zpass;
++    }
++    for (k = 0; k < n - 1; k++) {
++        total->depth_fail += s_pool.cnt[k].depth_fail;
++        total->pixels += s_pool.cnt[k].pixels;
++        total->zpass += s_pool.cnt[k].zpass;
++    }
+ }
+ #endif
+ 
+@@ -2684,8 +2844,21 @@ static int transform_vertex(uint32_t index, Nv2aVshOutput *out)
+ 
+     if (!batch_uses_program())
+         return ffp_vertex(index, out);
+-    for (a = 0; a < NV2A_VSH_INPUTS; a++)
+-        fetch_attr(&s_gpu.attr[a], index, in[a]);   /* absent: 0,0,0,1 */
++    for (a = 0; a < NV2A_VSH_INPUTS; a++) {
++        const VertexAttr *at = &s_gpu.attr[a];
++        /* A disabled attribute (no size or no stride) is not 0,0,0,1 on the
++         * NV2A: it holds the last value written through SET_VERTEX_DATA*,
++         * the same register state immediate mode builds vertices from (xemu
++         * feeds it as the "inline" value of every disabled input). A program
++         * may read it as a per-draw constant -- SSX 3's 2D/FMV program reads
++         * its matrix from v8..v15, set with SET_VERTEX_DATA4F_M before each
++         * draw; with 0,0,0,1 every vertex transformed to the same point and
++         * the whole intro video drew as degenerate triangles. */
++        if (!at->size || !at->stride)
++            memcpy(in[a], s_gpu.imm_attr[a], sizeof in[a]);
++        else
++            fetch_attr(at, index, in[a]);
++    }
+     if (!nv2a_vsh_run((const float (*)[4])in, out))
+         return 0;
+     /* oPos.w == 0 comes from a program that never divided by w: x, y and z
+@@ -2721,15 +2894,40 @@ static void xf_set_viewport(void)
+     s_xf_o[2] = of[2];
+ }
+ 
++/* Post-transform vertex cache, per batch: an indexed mesh names each vertex
++ * several times (about six in a closed triangle list), and the program
++ * runs on the CPU, so each repeat used to cost a full program run -- in a
++ * SSX 3 race the interpreter was the NV2A thread's whole budget. Direct
++ * mapped by index; an entry counts only for the batch (generation) that
++ * wrote it. Off while programs may write constants (CXT_WRITE), where a
++ * vertex's result can depend on the ones before it. */
++#define NV_VCACHE_SIZE 4096
++static uint32_t s_vc_idx[NV_VCACHE_SIZE], s_vc_gen[NV_VCACHE_SIZE];
++static uint32_t s_vc_pos[NV_VCACHE_SIZE], s_vc_cur;
++
+ static void raster_batch_program(void)
+ {
+     uint32_t i, n = s_gpu.idx_count;
++    int cache = !nv2a_vsh_cxt_write_enabled();
+ 
+     if (!s_xf && !(s_xf = (Nv2aVshOutput *)calloc(NV_MAX_INDICES, sizeof *s_xf)))
+         return;
+-    for (i = 0; i < n; i++)
+-        if (!transform_vertex(s_gpu.idx[i], &s_xf[i]))
++    if (++s_vc_cur == 0) {                 /* generation wrapped: forget all */
++        memset(s_vc_gen, 0, sizeof s_vc_gen);
++        s_vc_cur = 1;
++    }
++    for (i = 0; i < n; i++) {
++        uint32_t ix = s_gpu.idx[i], slot = ix & (NV_VCACHE_SIZE - 1);
++        if (cache && s_vc_gen[slot] == s_vc_cur && s_vc_idx[slot] == ix) {
++            s_xf[i] = s_xf[s_vc_pos[slot]];
++            continue;
++        }
++        if (!transform_vertex(ix, &s_xf[i]))
+             return;                                    /* no program loaded */
++        s_vc_gen[slot] = s_vc_cur;
++        s_vc_idx[slot] = ix;
++        s_vc_pos[slot] = i;
++    }
+     xf_set_viewport();
+     {
+         const VertexAttr *tc = texcoord_attr();
+@@ -2781,13 +2979,20 @@ static void raster_batch_program(void)
+         /* RECOMP_VSH_TRACE=<n>: print n program batches -- attribute setup,
+          * raw inputs, key constants, and what came out. */
+         static int left = -1;
++        static uint32_t every = 20000;
+         if (left < 0) {
+             const char *t = getenv("RECOMP_VSH_TRACE");
++            const char *e = getenv("RECOMP_VSH_TRACE_EVERY");
+             left = t ? atoi(t) : 0;
++            if (e && strtoul(e, NULL, 0) > 0)
++                every = (uint32_t)strtoul(e, NULL, 0);
+         }
+-        /* Spread out: one every 20000 program batches, so a run that spends
+-         * its first half in menus still traces the 3D scene. */
+-        if (left > 0 && n >= 3 && s_gpu.batches_program % 20000 == 0) {
++        /* Spread out: one every 20000 program batches by default, so a run
++         * that spends its first half in menus still traces the 3D scene.
++         * RECOMP_VSH_TRACE_EVERY=<n> changes the stride -- 1 traces the very
++         * first batches, which is what a title whose first screen already
++         * draws nothing needs. */
++        if (left > 0 && n >= 3 && s_gpu.batches_program % every == 0) {
+             float in[4];
+             left--;
+             fprintf(stderr, "[VTRACE] prim %u n %u idx %u %u %u\n", s_gpu.prim,
+@@ -4087,10 +4292,15 @@ void nv2a_pb_exec_report(void)
+     int i, j;
+ 
+     {
+-        /* Frames per second of guest time, from flips between reports. */
++        /* Frames per second of wall time, from flips between reports.
++         * Not clock(): that is process CPU time on POSIX, and with the
++         * executor, the rasteriser pool and the title's GPU waits all busy
++         * it ran several times faster than the wall -- Linux reported 1.5 fps
++         * for a front end flipping about 4 times a second (MSVC's clock() is
++         * wall time, so Windows read right). */
+         static uint32_t last_flips;
+         static unsigned long last_ms;
+-        unsigned long now = (unsigned long)(clock() * 1000.0 / CLOCKS_PER_SEC);
++        unsigned long now = (unsigned long)GetTickCount64();
+         if (last_ms && now > last_ms)
+             fprintf(stderr, "[GPU] %.2f fps (%u flips)%c",
+                     (s_gpu.flips - last_flips) * 1000.0 / (now - last_ms),
+diff --git a/src/kernel/nv2a_vsh_interp.c b/src/kernel/nv2a_vsh_interp.c
+index c3fba75..9764b13 100644
+--- a/src/kernel/nv2a_vsh_interp.c
++++ b/src/kernel/nv2a_vsh_interp.c
+@@ -41,6 +41,26 @@ static uint32_t s_const_load, s_const_word;
+ static uint32_t s_cxt_write;
+ static int      s_const_trace = -1;      /* RECOMP_VSH_DUMP: constant traffic */
+ 
++/* The program from the start slot to its FINAL instruction, with every field
++ * extracted once. Field extraction per source per vertex was most of the
++ * interpreter's time (read_src); a program changes far less often than it
++ * runs. Rebuilt lazily after any upload or start-slot change. */
++typedef struct {
++    uint8_t  neg, mux, reg, rel;    /* rel: constant index + a0.x */
++    uint8_t  sw[4];                 /* component per lane */
++    uint16_t index;                 /* input (mux 2) or constant (mux 3) */
++} VshSrc;
++
++typedef struct {
++    VshSrc   src[3];
++    uint8_t  mac, ilu, mac_mask, ilu_mask, tdst, omask, oaddr;
++    uint8_t  out_ilu, out_o, uses[3];
++} VshIns;
++
++static VshIns   s_decoded[NV2A_VSH_SLOTS];
++static uint32_t s_ndecoded;
++static int      s_decoded_ok;           /* 0: rebuild before the next run */
++
+ static int vsh_dump_enabled(void)
+ {
+     if (s_const_trace < 0)
+@@ -65,14 +85,21 @@ void nv2a_vsh_program_word(uint32_t word)
+ {
+     if (s_load_slot < NV2A_VSH_SLOTS)
+         s_program[s_load_slot][s_load_word] = word;
++    s_decoded_ok = 0;
+     if (++s_load_word == 4) {
+         s_load_word = 0;
+         s_load_slot++;
+     }
+ }
+ 
+-void nv2a_vsh_set_start_slot(uint32_t slot) { s_start_slot = slot; }
++void nv2a_vsh_set_start_slot(uint32_t slot)
++{
++    if (slot != s_start_slot)
++        s_decoded_ok = 0;
++    s_start_slot = slot;
++}
+ void nv2a_vsh_set_cxt_write(uint32_t enable) { s_cxt_write = enable; }
++int  nv2a_vsh_cxt_write_enabled(void) { return s_cxt_write != 0; }
+ 
+ void nv2a_vsh_set_constant_load(uint32_t index)
+ {
+@@ -116,6 +143,7 @@ void nv2a_vsh_set_instruction(uint32_t slot, const uint32_t words[4])
+ {
+     if (slot < NV2A_VSH_SLOTS)
+         memcpy(s_program[slot], words, sizeof s_program[slot]);
++    s_decoded_ok = 0;
+ }
+ 
+ /* ---- disassembly (RECOMP_VSH_DUMP) --------------------------------------- */
+@@ -198,43 +226,86 @@ void nv2a_vsh_constant_component(uint32_t index, uint32_t comp, uint32_t word)
+ 
+ typedef struct { float v[4]; } vec4;
+ 
+-static vec4 read_src(const uint32_t *ins, int which,
+-                     const float in[NV2A_VSH_INPUTS][4],
+-                     const vec4 *temp, const vec4 *opos, int a0)
++static void decode_src(const uint32_t *ins, int which, VshSrc *d)
+ {
+-    uint32_t neg, swz, mux, reg;
+-    const float *s;
+-    vec4 r;
++    uint32_t swz;
+ 
+     if (which == 0) {
+-        neg = field(ins, 1, 8, 1); swz = field(ins, 1, 0, 8);
+-        mux = field(ins, 2, 26, 2); reg = field(ins, 2, 28, 4);
++        d->neg = (uint8_t)field(ins, 1, 8, 1); swz = field(ins, 1, 0, 8);
++        d->mux = (uint8_t)field(ins, 2, 26, 2); d->reg = (uint8_t)field(ins, 2, 28, 4);
+     } else if (which == 1) {
+-        neg = field(ins, 2, 25, 1); swz = field(ins, 2, 17, 8);
+-        mux = field(ins, 2, 11, 2); reg = field(ins, 2, 13, 4);
++        d->neg = (uint8_t)field(ins, 2, 25, 1); swz = field(ins, 2, 17, 8);
++        d->mux = (uint8_t)field(ins, 2, 11, 2); d->reg = (uint8_t)field(ins, 2, 13, 4);
+     } else {
+-        neg = field(ins, 2, 10, 1); swz = field(ins, 2, 2, 8);
+-        mux = field(ins, 3, 28, 2);
+-        reg = (field(ins, 2, 0, 2) << 2) | field(ins, 3, 30, 2);
++        d->neg = (uint8_t)field(ins, 2, 10, 1); swz = field(ins, 2, 2, 8);
++        d->mux = (uint8_t)field(ins, 3, 28, 2);
++        d->reg = (uint8_t)((field(ins, 2, 0, 2) << 2) | field(ins, 3, 30, 2));
+     }
++    d->sw[0] = (uint8_t)((swz >> 6) & 3);
++    d->sw[1] = (uint8_t)((swz >> 4) & 3);
++    d->sw[2] = (uint8_t)((swz >> 2) & 3);
++    d->sw[3] = (uint8_t)(swz & 3);
++    d->rel = (uint8_t)field(ins, 3, 1, 1);
++    d->index = (uint16_t)(d->mux == 2 ? field(ins, 1, 9, 4) : field(ins, 1, 13, 8));
++}
+ 
+-    if (mux == 1)
+-        s = (reg == 12) ? opos->v : (reg < 12 ? temp[reg].v : temp[0].v);
+-    else if (mux == 2)
+-        s = in[field(ins, 1, 9, 4)];
++static void decode_program(void)
++{
++    uint32_t s;
++
++    s_ndecoded = 0;
++    for (s = s_start_slot; s < NV2A_VSH_SLOTS; s++) {
++        const uint32_t *ins = s_program[s];
++        VshIns *d = &s_decoded[s_ndecoded++];
++        int k;
++
++        for (k = 0; k < 3; k++)
++            decode_src(ins, k, &d->src[k]);
++        d->mac = (uint8_t)field(ins, 1, 21, 4);
++        d->ilu = (uint8_t)field(ins, 1, 25, 3);
++        d->mac_mask = (uint8_t)field(ins, 3, 24, 4);
++        d->ilu_mask = (uint8_t)field(ins, 3, 16, 4);
++        d->tdst = (uint8_t)field(ins, 3, 20, 4);
++        d->omask = (uint8_t)field(ins, 3, 12, 4);
++        d->oaddr = (uint8_t)field(ins, 3, 3, 8);
++        d->out_ilu = (uint8_t)field(ins, 3, 2, 1);
++        d->out_o = (uint8_t)field(ins, 3, 11, 1);
++        /* Which sources the ops read: the MAC A (and B, C by op), the ILU C. */
++        d->uses[0] = d->mac != 0;
++        d->uses[1] = d->mac == 2 || d->mac == 4 || (d->mac >= 5 && d->mac <= 12);
++        d->uses[2] = d->mac == 3 || d->mac == 4 || d->ilu != 0;
++        if (field(ins, 3, 0, 1))
++            break;
++    }
++    /* No FINAL within program memory: nothing to run (see nv2a_vsh_run). */
++    if (s == NV2A_VSH_SLOTS)
++        s_ndecoded = 0;
++    s_decoded_ok = 1;
++}
++
++static vec4 read_src(const VshSrc *d, const float in[NV2A_VSH_INPUTS][4],
++                     const vec4 *temp, const vec4 *opos, int a0)
++{
++    const float *s;
++    vec4 r;
++
++    if (d->mux == 1)
++        s = (d->reg == 12) ? opos->v : (d->reg < 12 ? temp[d->reg].v : temp[0].v);
++    else if (d->mux == 2)
++        s = in[d->index];
+     else {
+-        int ci = (int)field(ins, 1, 13, 8);
+-        if (field(ins, 3, 1, 1))
++        int ci = (int)d->index;
++        if (d->rel)
+             ci += a0;
+         if (ci < 0 || ci >= NV2A_VSH_CONSTANTS)
+             ci = 0;
+         s = s_const[ci];
+     }
+-    r.v[0] = s[(swz >> 6) & 3];
+-    r.v[1] = s[(swz >> 4) & 3];
+-    r.v[2] = s[(swz >> 2) & 3];
+-    r.v[3] = s[swz & 3];
+-    if (neg) {
++    r.v[0] = s[d->sw[0]];
++    r.v[1] = s[d->sw[1]];
++    r.v[2] = s[d->sw[2]];
++    r.v[3] = s[d->sw[3]];
++    if (d->neg) {
+         r.v[0] = -r.v[0]; r.v[1] = -r.v[1];
+         r.v[2] = -r.v[2]; r.v[3] = -r.v[3];
+     }
+@@ -368,27 +439,30 @@ int nv2a_vsh_run(const float in[NV2A_VSH_INPUTS][4], Nv2aVshOutput *out)
+      * unwritten stage at infinity. */
+     outregs[9][3] = outregs[10][3] = outregs[11][3] = outregs[12][3] = 1.0f;
+ 
+-    for (s = s_start_slot; s < NV2A_VSH_SLOTS; s++) {
+-        const uint32_t *ins = s_program[s];
+-        uint32_t mac = field(ins, 1, 21, 4), ilu = field(ins, 1, 25, 3);
+-        uint32_t mac_mask = field(ins, 3, 24, 4), ilu_mask = field(ins, 3, 16, 4);
+-        uint32_t tdst = field(ins, 3, 20, 4);
+-        uint32_t omask = field(ins, 3, 12, 4), oaddr = field(ins, 3, 3, 8);
+-        vec4 a = read_src(ins, 0, in, temp, &opos, a0);
+-        vec4 b = read_src(ins, 1, in, temp, &opos, a0);
+-        vec4 c = read_src(ins, 2, in, temp, &opos, a0);
+-        vec4 mres = {{0, 0, 0, 0}}, ires = {{0, 0, 0, 0}};
++    if (!s_decoded_ok)
++        decode_program();
++    for (s = 0; s < s_ndecoded; s++) {
++        const VshIns *ins = &s_decoded[s];
++        uint32_t mac = ins->mac, ilu = ins->ilu;
++        uint32_t tdst = ins->tdst, omask = ins->omask, oaddr = ins->oaddr;
++        vec4 zero = {{0, 0, 0, 0}}, a = zero, b = zero, c = zero;
++        vec4 mres = zero, ires = zero;
++
++        /* Sources an op does not read are not fetched; it never sees them. */
++        if (ins->uses[0]) a = read_src(&ins->src[0], in, temp, &opos, a0);
++        if (ins->uses[1]) b = read_src(&ins->src[1], in, temp, &opos, a0);
++        if (ins->uses[2]) c = read_src(&ins->src[2], in, temp, &opos, a0);
+ 
+         if (mac)
+             mres = run_mac(mac, a, b, c, &a0);
+         if (ilu)
+             ires = run_ilu(ilu, c);
+ 
+-        if (mac && mac != 13 && mac_mask) {
++        if (mac && mac != 13 && ins->mac_mask) {
+             float *d = tdst == 12 ? opos.v : (tdst < 12 ? temp[tdst].v : NULL);
+-            if (d) write_masked(d, &mres, mac_mask);
++            if (d) write_masked(d, &mres, ins->mac_mask);
+         }
+-        if (ilu && ilu_mask) {
++        if (ilu && ins->ilu_mask) {
+             /* Paired with any MAC op, the ILU can only write R1 -- even when
+              * the MAC half writes no temp at all. The D3D epilogue is exactly
+              * that: `mul o[0].xyz` beside `rcc R1.x`, then `mad` with R1.x.
+@@ -396,11 +470,11 @@ int nv2a_vsh_run(const float in[NV2A_VSH_INPUTS][4], Nv2aVshOutput *out)
+              * put every vertex of every 3D batch at c[59]. */
+             uint32_t it = mac ? 1u : tdst;
+             float *d = it == 12 ? opos.v : (it < 12 ? temp[it].v : NULL);
+-            if (d) write_masked(d, &ires, ilu_mask);
++            if (d) write_masked(d, &ires, ins->ilu_mask);
+         }
+         if (omask) {
+-            const vec4 *src = field(ins, 3, 2, 1) ? &ires : &mres;
+-            if (!field(ins, 3, 11, 1)) {                  /* to c[] */
++            const vec4 *src = ins->out_ilu ? &ires : &mres;
++            if (!ins->out_o) {                            /* to c[] */
+                 if (s_cxt_write && oaddr < NV2A_VSH_CONSTANTS)
+                     write_masked(s_const[oaddr], src, omask);
+             } else if (oaddr == 0) {
+@@ -409,17 +483,17 @@ int nv2a_vsh_run(const float in[NV2A_VSH_INPUTS][4], Nv2aVshOutput *out)
+                 write_masked(outregs[oaddr], src, omask);
+             }
+         }
+-        if (field(ins, 3, 0, 1)) {
+-            memcpy(out->pos, opos.v, sizeof out->pos);
+-            memcpy(out->d0, outregs[3], sizeof out->d0);
+-            memcpy(out->d1, outregs[4], sizeof out->d1);
+-            memcpy(out->fog, outregs[5], sizeof out->fog);
+-            memcpy(out->tex[0], outregs[9], sizeof out->tex[0]);
+-            memcpy(out->tex[1], outregs[10], sizeof out->tex[1]);
+-            memcpy(out->tex[2], outregs[11], sizeof out->tex[2]);
+-            memcpy(out->tex[3], outregs[12], sizeof out->tex[3]);
+-            return 1;
+-        }
++    }
++    if (s_ndecoded) {
++        memcpy(out->pos, opos.v, sizeof out->pos);
++        memcpy(out->d0, outregs[3], sizeof out->d0);
++        memcpy(out->d1, outregs[4], sizeof out->d1);
++        memcpy(out->fog, outregs[5], sizeof out->fog);
++        memcpy(out->tex[0], outregs[9], sizeof out->tex[0]);
++        memcpy(out->tex[1], outregs[10], sizeof out->tex[1]);
++        memcpy(out->tex[2], outregs[11], sizeof out->tex[2]);
++        memcpy(out->tex[3], outregs[12], sizeof out->tex[3]);
++        return 1;
+     }
+     return 0;
+ }
+diff --git a/src/kernel/nv2a_vsh_interp.h b/src/kernel/nv2a_vsh_interp.h
+index 8acb0af..c7a266b 100644
+--- a/src/kernel/nv2a_vsh_interp.h
++++ b/src/kernel/nv2a_vsh_interp.h
+@@ -43,6 +43,7 @@ void nv2a_vsh_set_start_slot(uint32_t slot);          /* _PROGRAM_START     */
+ void nv2a_vsh_set_constant_load(uint32_t index);      /* _CONSTANT_LOAD     */
+ void nv2a_vsh_constant_word(uint32_t word);           /* _CONSTANT(i)       */
+ void nv2a_vsh_set_cxt_write(uint32_t enable);         /* _CXT_WRITE_EN      */
++int  nv2a_vsh_cxt_write_enabled(void);  /* programs may write c[]: results order-dependent */
+ 
+ /* Run the program from the start slot on one vertex. Inputs are the ten
+  * attribute values as floats. Returns 0 if there is no program to run (no
+diff --git a/src/kernel/xbox_memory_layout.c b/src/kernel/xbox_memory_layout.c
+index 362cefe..5ecd60f 100644
+--- a/src/kernel/xbox_memory_layout.c
++++ b/src/kernel/xbox_memory_layout.c
+@@ -655,8 +655,22 @@ static LONG CALLBACK ac97_write_veh(PEXCEPTION_POINTERS ep)
+     return EXCEPTION_CONTINUE_SEARCH;
+ }
+ 
+-#if !defined(_WIN32) && defined(__aarch64__)
++/* POSIX hosts with a decoder for their own stores: arm64 (A64) and Linux
++ * x86-64 (the Win32 x86-64 decoder over the ucontext). */
++#if !defined(_WIN32) && (defined(__aarch64__) || (defined(__linux__) && defined(__x86_64__)))
++#define AC97_POSIX_TRAP 1
++#endif
++
++#if defined(AC97_POSIX_TRAP)
++#if defined(__aarch64__)
+ #include "../platform/mmio_decode_a64.h"
++#define ac97_posix_emulate(uc, off, dev, rd, wr) \
++    mmio_emulate_a64((ucontext_t *)(uc), (off), (dev), (rd), (wr))
++#else
++#include "../platform/mmio_decode.h"
++#define ac97_posix_emulate(uc, off, dev, rd, wr) \
++    mmio_emulate((mmio_ctx_t *)(uc), (off), (dev), (rd), (wr))
++#endif
+ #include <sys/mman.h>
+ static size_t g_ac97_hsize;    /* host page: 16 KB on arm64 Darwin */
+ 
+@@ -672,7 +686,7 @@ static void ac97_posix_wr(void *dev, uint32_t off, uint64_t v, int size)
+     memcpy((char *)dev + off, &v, size > 8 ? 8 : size);
+ }
+ 
+-/* POSIX arm64 half of the AC'97 write trap: the page is PROT_READ, so a
++/* POSIX half of the AC'97 write trap: the page is PROT_READ, so a
+  * write arrives as SIGBUS/SIGSEGV; the title's fault handler reaches this
+  * through xbox_PosixMmioFault before reporting. The store is emulated onto
+  * the page (open for the moment), the controller's reaction applied, and the
+@@ -704,8 +718,8 @@ int xbox_Ac97PosixFault(void *ucv, uintptr_t fault)
+         __atomic_store_n(&g_ac97_posix_lock, 0, __ATOMIC_RELEASE);
+         return 0;
+     }
+-    ok = mmio_emulate_a64((ucontext_t *)ucv, (uint32_t)(fault - (uintptr_t)g_ac97_page),
+-                          g_ac97_page, ac97_posix_rd, ac97_posix_wr);
++    ok = ac97_posix_emulate(ucv, (uint32_t)(fault - (uintptr_t)g_ac97_page),
++                            g_ac97_page, ac97_posix_rd, ac97_posix_wr);
+     if (ok)
+         ac97_clear_reset_bits();
+     mprotect(g_ac97_page, g_ac97_hsize, PROT_READ);
+@@ -723,7 +737,7 @@ static void ac97_arm_write_trap(void)
+ 
+     if (!g_mcpx_memory || g_ac97_page)
+         return;
+-#if !defined(_WIN32) && !defined(__aarch64__)
++#if !defined(_WIN32) && !defined(AC97_POSIX_TRAP)
+     /* No POSIX decoder for this host's stores: a trapped write would be a
+      * fault nothing services. Leave the page writable. */
+     (void)old;
+@@ -732,7 +746,7 @@ static void ac97_arm_write_trap(void)
+     return;
+ #endif
+     g_ac97_page = (char *)g_mcpx_memory + AC97_NABM_OFFSET;
+-#if !defined(_WIN32) && defined(__aarch64__)
++#if defined(AC97_POSIX_TRAP)
+     (void)old;
+     g_ac97_hsize = (size_t)sysconf(_SC_PAGESIZE);
+     if (g_ac97_hsize < AC97_TRAP_BYTES)
+@@ -830,19 +844,20 @@ int xbox_VehMmioFault(void *exception_pointers)
+     return 0;
+ }
+ #else
+-#if defined(__aarch64__)
++#if defined(__aarch64__) || (defined(__linux__) && defined(__x86_64__))
++#define MMIO_POSIX_DECODER 1
+ extern bool apu_hook_handle_mmio_posix(void *ucv, uintptr_t fault_addr,
+                                        uint32_t fault_xbox_va, int is_write);
+ #endif
+ 
+ /* POSIX: call from the title's SIGBUS/SIGSEGV handler (SA_SIGINFO) with its
+  * ucontext_t * and si_addr; on 1, return from the handler and the thread
+- * resumes after the emulated instruction. APU, then AC'97, then OHCI. Only
+- * arm64 hosts have a decoder; elsewhere nothing is trapped and this returns
+- * 0. */
++ * resumes after the emulated instruction. APU, then AC'97, then OHCI. arm64
++ * hosts decode with the A64 decoder, Linux x86-64 with the x86-64 one over
++ * the ucontext; elsewhere nothing is trapped and this returns 0. */
+ int xbox_PosixMmioFault(void *ucv, uintptr_t fault)
+ {
+-#if defined(__aarch64__)
++#if defined(MMIO_POSIX_DECODER)
+     uint32_t va;
+ 
+     if (!mmio_fault_va(fault, &va))
+@@ -1350,17 +1365,100 @@ static void framebuffer_probe_tick(void)
+  * and a level load, thousands of kickoffs long, looked frozen. Clearing them
+  * from inside the walk answers the kickoff within a few hundred commands,
+  * without a thread of its own spinning on a host core. */
++/* A pending vblank, held in the status registers until the title acks it.
++ *
++ * The table above holds every interrupt status register at zero, which is
++ * right for interrupts nothing raises and wrong for the one that is raised:
++ * the timer thread sets PCRTC_INTR_0 bit 0 and PMC_INTR_0 bit 24, calls the
++ * D3D ISR, and the ISR's DPC then reads PMC_INTR_0 to see what happened. This
++ * thread zeroed the bits in between often enough that the DPC saw nothing,
++ * skipped its vblank handling and never set the event D3D waits on in
++ * BlockUntilVerticalBlank. SSX 3 sits in exactly that wait while it sets the
++ * display mode (one wait per AvSetDisplayMode step), and boot took anywhere
++ * from 0.7 s to over 70 s depending on who won; its title-screen fade-in,
++ * which counts vblanks, stalled the same way.
++ *
++ * The bits stay set until the title acknowledges. Hardware clears on a write
++ * of 1, which plain memory cannot see, so the raise also sets a marker bit
++ * (31) in PCRTC_INTR_0 that no title writes: XDK D3D acks with exactly 1, the
++ * marker disappears, and the next pass clears both registers. A title that
++ * never acks is let go after NV2A_VBLANK_HOLD_MS. The lock keeps this thread
++ * from zeroing a vblank between the raise's two writes. */
++#define NV2A_PMC_INTR_PCRTC      (1u << 24)
++#define NV2A_PCRTC_INTR_VBLANK   (1u << 0)
++#define NV2A_PCRTC_ACK_MARKER    (1u << 31)
++#define NV2A_VBLANK_HOLD_MS      100
++static volatile LONG s_vblank_pending;
++static ULONGLONG     s_vblank_raised_ms;
++static CRITICAL_SECTION s_vblank_lock;
++static INIT_ONCE s_vblank_lock_once = INIT_ONCE_STATIC_INIT;
++
++static BOOL CALLBACK vblank_lock_init(PINIT_ONCE o, PVOID p, PVOID *c)
++{
++    (void)o; (void)p; (void)c;
++    InitializeCriticalSection(&s_vblank_lock);
++    return TRUE;
++}
++
++int xbox_Nv2aRaiseVblank(void)
++{
++    volatile uint32_t *regs = (volatile uint32_t *)g_nv2a_memory;
++
++    if (!regs)
++        return 0;
++    InitOnceExecuteOnce(&s_vblank_lock_once, vblank_lock_init, NULL, NULL);
++    EnterCriticalSection(&s_vblank_lock);
++    regs[0x600100 / 4] |= NV2A_PCRTC_INTR_VBLANK | NV2A_PCRTC_ACK_MARKER;
++    regs[0x000100 / 4] |= NV2A_PMC_INTR_PCRTC;
++    s_vblank_raised_ms = GetTickCount64();
++    s_vblank_pending = 1;
++    LeaveCriticalSection(&s_vblank_lock);
++    return 1;
++}
++
+ void xbox_Nv2aAckBusyBits(void)
+ {
+     volatile uint32_t *regs = (volatile uint32_t *)g_nv2a_memory;
++    int hold = 0;
+ 
+     if (!regs)
+         return;
++    if (s_vblank_pending) {
++        EnterCriticalSection(&s_vblank_lock);
++        if (s_vblank_pending) {
++            if ((regs[0x600100 / 4] & NV2A_PCRTC_ACK_MARKER)
++                    && GetTickCount64() - s_vblank_raised_ms < NV2A_VBLANK_HOLD_MS)
++                hold = 1;                       /* not acknowledged yet */
++            else
++                s_vblank_pending = 0;
++        }
++        if (hold) {
++            /* Everything but the pending vblank clears as before. */
++            regs[0x000100 / 4] &= NV2A_PMC_INTR_PCRTC;
++            regs[0x600100 / 4] &= NV2A_PCRTC_INTR_VBLANK | NV2A_PCRTC_ACK_MARKER;
++        } else {
++            regs[0x000100 / 4] = 0;
++            regs[0x600100 / 4] = 0;
++        }
++        LeaveCriticalSection(&s_vblank_lock);
++    }
+     for (size_t i = 0; i < sizeof(NV2A_ACK) / sizeof(NV2A_ACK[0]); i++) {
+         volatile uint32_t *r =
+             (volatile uint32_t *)((char *)regs + NV2A_ACK[i].offset);
++        if (hold && (NV2A_ACK[i].offset == 0x000100 || NV2A_ACK[i].offset == 0x600100))
++            continue;
+         if (*r & NV2A_ACK[i].busy_mask) {
+-            *r &= ~NV2A_ACK[i].busy_mask;
++            /* A raise between the test above and this write would be wiped:
++             * the two vblank registers clear under the lock. */
++            if (NV2A_ACK[i].offset == 0x000100 || NV2A_ACK[i].offset == 0x600100) {
++                InitOnceExecuteOnce(&s_vblank_lock_once, vblank_lock_init, NULL, NULL);
++                EnterCriticalSection(&s_vblank_lock);
++                if (!s_vblank_pending)
++                    *r &= ~NV2A_ACK[i].busy_mask;
++                LeaveCriticalSection(&s_vblank_lock);
++            } else {
++                *r &= ~NV2A_ACK[i].busy_mask;
++            }
+         }
+     }
+ }
+diff --git a/src/kernel/xbox_memory_layout.h b/src/kernel/xbox_memory_layout.h
+index 14eee45..5293311 100644
+--- a/src/kernel/xbox_memory_layout.h
++++ b/src/kernel/xbox_memory_layout.h
+@@ -181,6 +181,11 @@ void xbox_Nv2aFrameCounterFlip(void);
+ /* A word of the NV2A register file (offset from the register base); NULL until
+  * the aperture is mapped. */
+ volatile uint32_t *xbox_Nv2aRegPtr(uint32_t offset);
++/* Raise the vblank in the interrupt status registers (PCRTC_INTR_0 bit 0,
++ * PMC_INTR_0 bit 24) and keep it pending until the title acknowledges it,
++ * as write-1-to-clear hardware does; see the comment at the definition.
++ * Returns 0 before the aperture is mapped. */
++int xbox_Nv2aRaiseVblank(void);
+ 
+ /* Tell the runtime where the display framebuffer is (from AvSetDisplayMode). */
+ void xbox_SetDisplayFramebuffer(uint32_t fb_va, uint32_t pitch);
+diff --git a/src/platform/mmio_decode.h b/src/platform/mmio_decode.h
+index 1916156..3c8acff 100644
+--- a/src/platform/mmio_decode.h
++++ b/src/platform/mmio_decode.h
+@@ -16,6 +16,11 @@
+  * Header-only and static inline: one function, one caller per device, and a
+  * library for it would be more build wiring than code.
+  *
++ * Two hosts share it, behind mmio_ctx_t and the MMIO_CTX_* accessors: Win32
++ * (a VEH's CONTEXT) and Linux x86-64 (a SIGSEGV handler's ucontext_t, whose
++ * gregs[] hold the same registers). A Linux translation unit must define
++ * _GNU_SOURCE before its first system header, or glibc hides REG_RIP & co.
++ *
+  * The instructions covered are what the XDK device code actually emits against
+  * registers -- moves both ways, the immediate forms, the zero-extending loads,
+  * and the ALU, read-modify-write and flag-setting forms a poll loop is built
+@@ -32,12 +37,13 @@
+ 
+ #if defined(_WIN32)
+ #include <windows.h>
++#define MMIO_DECODE_X86_64 1
+ 
+-/* Service one register access. dev is passed straight back to the callbacks. */
+-typedef uint64_t (*mmio_read_fn)(void *dev, uint32_t off, int size);
+-typedef void     (*mmio_write_fn)(void *dev, uint32_t off, uint64_t val, int size);
++typedef CONTEXT mmio_ctx_t;
++#define MMIO_CTX_PC(c)     ((c)->Rip)
++#define MMIO_CTX_EFLAGS(c) ((c)->EFlags)
+ 
+-static inline uint64_t *mmio_ctx_reg(PCONTEXT c, int reg)
++static inline uint64_t *mmio_ctx_reg(mmio_ctx_t *c, int reg)
+ {
+     switch (reg & 0xF) {
+     case 0:  return (uint64_t *)&c->Rax;   case 1:  return (uint64_t *)&c->Rcx;
+@@ -51,6 +57,32 @@ static inline uint64_t *mmio_ctx_reg(PCONTEXT c, int reg)
+     default: return NULL;
+     }
+ }
++#elif defined(__linux__) && defined(__x86_64__)
++#include <ucontext.h>
++#define MMIO_DECODE_X86_64 1
++#ifndef REG_RIP
++#error "mmio_decode.h on Linux needs _GNU_SOURCE defined before the first system header"
++#endif
++
++typedef ucontext_t mmio_ctx_t;
++#define MMIO_CTX_PC(c)     ((c)->uc_mcontext.gregs[REG_RIP])
++#define MMIO_CTX_EFLAGS(c) ((c)->uc_mcontext.gregs[REG_EFL])
++
++/* x86 register number (ModRM/REX order) -> gregs[] slot. */
++static inline uint64_t *mmio_ctx_reg(mmio_ctx_t *c, int reg)
++{
++    static const int slot[16] = {
++        REG_RAX, REG_RCX, REG_RDX, REG_RBX, REG_RSP, REG_RBP, REG_RSI, REG_RDI,
++        REG_R8,  REG_R9,  REG_R10, REG_R11, REG_R12, REG_R13, REG_R14, REG_R15,
++    };
++    return (uint64_t *)&c->uc_mcontext.gregs[slot[reg & 0xF]];
++}
++#endif
++
++#if defined(MMIO_DECODE_X86_64)
++/* Service one register access. dev is passed straight back to the callbacks. */
++typedef uint64_t (*mmio_read_fn)(void *dev, uint32_t off, int size);
++typedef void     (*mmio_write_fn)(void *dev, uint32_t off, uint64_t val, int size);
+ 
+ static inline int mmio_modrm_len(const uint8_t *ip, int rex_b)
+ {
+@@ -80,7 +112,7 @@ static inline uint64_t mmio_size_mask(int size)
+ /* a OP b at the given width, with the flags a following jcc reads: ZF, SF, CF
+  * and OF. PF and AF are left alone; nothing branches on them after a register
+  * read. The logical operations clear CF and OF, as the hardware does. */
+-static inline uint64_t mmio_alu(PCONTEXT ctx, int op, uint64_t a, uint64_t b,
++static inline uint64_t mmio_alu(mmio_ctx_t *ctx, int op, uint64_t a, uint64_t b,
+                                 int size)
+ {
+     uint64_t m = mmio_size_mask(size), sign = 1ULL << (size * 8 - 1), r;
+@@ -102,17 +134,17 @@ static inline uint64_t mmio_alu(PCONTEXT ctx, int op, uint64_t a, uint64_t b,
+     case MMIO_ALU_XOR: r = a ^ b; break;
+     default:           r = a & b; break;                /* AND, TEST */
+     }
+-    ctx->EFlags &= ~(0x0001u | 0x0040u | 0x0080u | 0x0800u);
+-    if (cf)       ctx->EFlags |= 0x0001u;               /* CF */
+-    if (r == 0)   ctx->EFlags |= 0x0040u;               /* ZF */
+-    if (r & sign) ctx->EFlags |= 0x0080u;               /* SF */
+-    if (of)       ctx->EFlags |= 0x0800u;               /* OF */
++    MMIO_CTX_EFLAGS(ctx) &= ~(0x0001u | 0x0040u | 0x0080u | 0x0800u);
++    if (cf)       MMIO_CTX_EFLAGS(ctx) |= 0x0001u;               /* CF */
++    if (r == 0)   MMIO_CTX_EFLAGS(ctx) |= 0x0040u;               /* ZF */
++    if (r & sign) MMIO_CTX_EFLAGS(ctx) |= 0x0080u;               /* SF */
++    if (of)       MMIO_CTX_EFLAGS(ctx) |= 0x0800u;               /* OF */
+     return r;
+ }
+ 
+ /* A general register at an operand width. Without a REX prefix, byte
+  * registers 4-7 are AH, CH, DH and BH -- bits 15:8 of registers 0-3. */
+-static inline uint64_t mmio_get_reg(PCONTEXT c, int reg, int size, int has_rex)
++static inline uint64_t mmio_get_reg(mmio_ctx_t *c, int reg, int size, int has_rex)
+ {
+     if (size == 1 && !has_rex && reg >= 4 && reg < 8)
+         return (*mmio_ctx_reg(c, reg - 4) >> 8) & 0xFF;
+@@ -121,7 +153,7 @@ static inline uint64_t mmio_get_reg(PCONTEXT c, int reg, int size, int has_rex)
+ 
+ /* Write with x86-64 width rules: a 32-bit write zeroes bits 63:32, an 8- or
+  * 16-bit write merges into what was there. */
+-static inline void mmio_set_reg(PCONTEXT c, int reg, uint64_t v, int size,
++static inline void mmio_set_reg(mmio_ctx_t *c, int reg, uint64_t v, int size,
+                                 int has_rex)
+ {
+     uint64_t *d;
+@@ -159,10 +191,10 @@ static inline uint64_t mmio_imm(const uint8_t *p, int size, int *len)
+  * once; a memory-destination form reads, then writes (CMP and TEST only
+  * read). ADC/SBB, the rest of F6/F7 (NOT/NEG/MUL/DIV), string moves and
+  * anything else return 0. */
+-static inline int mmio_emulate(PCONTEXT ctx, uint32_t off, void *dev,
++static inline int mmio_emulate(mmio_ctx_t *ctx, uint32_t off, void *dev,
+                                mmio_read_fn rd, mmio_write_fn wr)
+ {
+-    const uint8_t *ip = (const uint8_t *)ctx->Rip;
++    const uint8_t *ip = (const uint8_t *)(uintptr_t)MMIO_CTX_PC(ctx);
+     int prefix = 0, has66 = 0, rex = 0, has_rex = 0;
+     const uint8_t *op;
+     int size, rex_w, rex_r, rex_b, mlen, reg, ilen, alu;
+@@ -207,7 +239,7 @@ static inline int mmio_emulate(PCONTEXT ctx, uint32_t off, void *dev,
+             if (alu != MMIO_ALU_CMP)
+                 wr(dev, off, v, size);
+         }
+-        ctx->Rip += prefix + 1 + mlen;
++        MMIO_CTX_PC(ctx) += prefix + 1 + mlen;
+         return 1;
+     }
+ 
+@@ -217,7 +249,7 @@ static inline int mmio_emulate(PCONTEXT ctx, uint32_t off, void *dev,
+         mlen = mmio_modrm_len(op + 1, rex_b);
+         reg  = ((op[1] >> 3) & 7) | (rex_r ? 8 : 0);
+         wr(dev, off, mmio_get_reg(ctx, reg, size, has_rex), size);
+-        ctx->Rip += prefix + 1 + mlen;
++        MMIO_CTX_PC(ctx) += prefix + 1 + mlen;
+         return 1;
+ 
+     case 0xC6: case 0xC7:                            /* MOV r/m, imm         */
+@@ -225,7 +257,7 @@ static inline int mmio_emulate(PCONTEXT ctx, uint32_t off, void *dev,
+         mlen = mmio_modrm_len(op + 1, rex_b);
+         imm  = mmio_imm(op + 1 + mlen, size, &ilen);
+         wr(dev, off, imm & mmio_size_mask(size), size);
+-        ctx->Rip += prefix + 1 + mlen + ilen;
++        MMIO_CTX_PC(ctx) += prefix + 1 + mlen + ilen;
+         return 1;
+ 
+     case 0x8A: case 0x8B:                            /* MOV r, r/m   (read)  */
+@@ -233,7 +265,7 @@ static inline int mmio_emulate(PCONTEXT ctx, uint32_t off, void *dev,
+         mlen = mmio_modrm_len(op + 1, rex_b);
+         reg  = ((op[1] >> 3) & 7) | (rex_r ? 8 : 0);
+         mmio_set_reg(ctx, reg, rd(dev, off, size), size, has_rex);
+-        ctx->Rip += prefix + 1 + mlen;
++        MMIO_CTX_PC(ctx) += prefix + 1 + mlen;
+         return 1;
+ 
+     case 0x84: case 0x85:                            /* TEST r/m, r          */
+@@ -242,7 +274,7 @@ static inline int mmio_emulate(PCONTEXT ctx, uint32_t off, void *dev,
+         reg  = ((op[1] >> 3) & 7) | (rex_r ? 8 : 0);
+         mmio_alu(ctx, MMIO_ALU_TEST, rd(dev, off, size),
+                  mmio_get_reg(ctx, reg, size, has_rex), size);
+-        ctx->Rip += prefix + 1 + mlen;
++        MMIO_CTX_PC(ctx) += prefix + 1 + mlen;
+         return 1;
+ 
+     case 0x80: case 0x81: case 0x83:                 /* group 1 r/m, imm     */
+@@ -260,7 +292,7 @@ static inline int mmio_emulate(PCONTEXT ctx, uint32_t off, void *dev,
+         v = mmio_alu(ctx, alu, rd(dev, off, size), imm, size);
+         if (alu != MMIO_ALU_CMP)
+             wr(dev, off, v, size);
+-        ctx->Rip += prefix + 1 + mlen + ilen;
++        MMIO_CTX_PC(ctx) += prefix + 1 + mlen + ilen;
+         return 1;
+ 
+     case 0xF6: case 0xF7:                            /* TEST r/m, imm        */
+@@ -270,7 +302,7 @@ static inline int mmio_emulate(PCONTEXT ctx, uint32_t off, void *dev,
+         mlen = mmio_modrm_len(op + 1, rex_b);
+         imm  = mmio_imm(op + 1 + mlen, size, &ilen);
+         mmio_alu(ctx, MMIO_ALU_TEST, rd(dev, off, size), imm, size);
+-        ctx->Rip += prefix + 1 + mlen + ilen;
++        MMIO_CTX_PC(ctx) += prefix + 1 + mlen + ilen;
+         return 1;
+ 
+     case 0x0F:
+@@ -280,7 +312,7 @@ static inline int mmio_emulate(PCONTEXT ctx, uint32_t off, void *dev,
+             reg   = ((op[2] >> 3) & 7) | (rex_r ? 8 : 0);
+             mmio_set_reg(ctx, reg, rd(dev, off, s) & mmio_size_mask(s),
+                          rex_w ? 8 : (has66 ? 2 : 4), 1);
+-            ctx->Rip += prefix + 2 + mlen;
++            MMIO_CTX_PC(ctx) += prefix + 2 + mlen;
+             return 1;
+         }
+         return 0;
+@@ -290,5 +322,5 @@ static inline int mmio_emulate(PCONTEXT ctx, uint32_t off, void *dev,
+     }
+ }
+ 
+-#endif /* _WIN32 */
++#endif /* MMIO_DECODE_X86_64 */
+ #endif /* MMIO_DECODE_H */
+diff --git a/src/usb/ohci.c b/src/usb/ohci.c
+index d45d8bb..92cd7aa 100644
+--- a/src/usb/ohci.c
++++ b/src/usb/ohci.c
+@@ -6,6 +6,11 @@
+  * plus a trace of every register access, because what the driver does after
+  * that decides how the rest gets built.
+  */
++/* Linux x86-64 decodes with mmio_decode.h over the ucontext's gregs[REG_*],
++ * which glibc only declares under _GNU_SOURCE -- before the first header. */
++#if defined(__linux__) && !defined(_GNU_SOURCE)
++#define _GNU_SOURCE
++#endif
+ #include "ohci.h"
+ #include "../platform/mmio_decode.h"
+ #include "../platform/mmio_decode_a64.h"
+@@ -26,6 +31,8 @@
+ #  define OHCI_TRAP_WIN32 1
+ #elif defined(__aarch64__)
+ #  define OHCI_TRAP_POSIX_A64 1
++#elif defined(__linux__) && defined(__x86_64__)
++#  define OHCI_TRAP_POSIX_X64 1   /* x86-64 decoder over the ucontext */
+ #endif
+ 
+ /* The runtime maps guest memory at a fixed host offset. */
+@@ -1286,7 +1293,8 @@ void xbox_OhciInit(void)
+         if ((unsigned)s_npads > s_ndp)
+             s_ndp = (unsigned)s_npads;      /* a port for every pad */
+     }
+-#if !defined(OHCI_TRAP_WIN32) && !defined(OHCI_TRAP_POSIX_A64)
++#if !defined(OHCI_TRAP_WIN32) && !defined(OHCI_TRAP_POSIX_A64) \
++    && !defined(OHCI_TRAP_POSIX_X64)
+     /* No decoder for this host's instructions, so a trapped access could not
+      * be answered. Leave the aperture as plain memory -- the title then sees
+      * no controller, exactly as with RECOMP_USB unset -- and say so. */
+@@ -1362,7 +1370,8 @@ int xbox_OhciOwnsAddress(uint32_t xbox_va)
+     return hc_for(xbox_va) != NULL;
+ }
+ 
+-#if defined(OHCI_TRAP_POSIX_A64) || defined(OHCI_TRAP_WIN32)
++#if defined(OHCI_TRAP_POSIX_A64) || defined(OHCI_TRAP_WIN32) \
++    || defined(OHCI_TRAP_POSIX_X64)
+ /* Both decoders hand over 8-byte accesses whole (ldr/str x or a d register
+  * on A64, a REX.W mov on x86-64); the registers are 32-bit, so an 8-byte
+  * access is two of them. */
+@@ -1403,16 +1412,19 @@ int xbox_OhciHandleMmio(void *ctx, uint32_t xbox_va)
+         fflush(stderr);
+     }
+     return ok;
+-#elif defined(OHCI_TRAP_WIN32)
++#elif defined(OHCI_TRAP_WIN32) || defined(OHCI_TRAP_POSIX_X64)
++    /* Win32: ctx is the VEH's CONTEXT; Linux x86-64: the handler's ucontext.
++     * mmio_ctx_t is whichever of the two this host has. */
+     OhciController *hc = hc_for(xbox_va);
+     int ok;
+ 
+     if (!hc)
+         return 0;
+-    ok = mmio_emulate((PCONTEXT)ctx, xbox_va - hc->base, hc,
++    ok = mmio_emulate((mmio_ctx_t *)ctx, xbox_va - hc->base, hc,
+                       ohci_read_split, ohci_write_split);
+     if (!ok && hc->decode_fail++ < 20) {
+-        const uint8_t *ip = (const uint8_t *)((PCONTEXT)ctx)->Rip;
++        const uint8_t *ip =
++            (const uint8_t *)(uintptr_t)MMIO_CTX_PC((mmio_ctx_t *)ctx);
+         fprintf(stderr, "  [OHCI%d] undecoded access at +0x%03X: "
+                         "%02X %02X %02X %02X %02X %02X\n",
+                 hc->index, xbox_va - hc->base,
+diff --git a/tools/recomp/lifter.py b/tools/recomp/lifter.py
+index baf1834..e5fa79c 100644
+--- a/tools/recomp/lifter.py
++++ b/tools/recomp/lifter.py
+@@ -87,6 +87,12 @@ _FUNC_RESERVED_IDENT = frozenset({
+     "llrint", "llround", "log1p", "log2", "logb", "lrint", "lround",
+     "nan", "nearbyint", "nextafter", "nexttoward", "remainder", "remquo",
+     "rint", "round", "scalbln", "scalbn", "tgamma", "trunc",
++    # <math.h> MSVC "old names" (no leading underscore) that MinGW-w64's
++    # math.h declares unless NO_OLDNAMES/__STRICT_ANSI__: an MSVC-built title
++    # carries its CRT's own `chgsign` and `fpclass`, and Ghidra's FidDb names
++    # them exactly that. glibc and UCRT do not declare these, so only a MinGW
++    # build failed (SSX 3: "conflicting types for 'chgsign'").
++    "chgsign", "finite", "fpclass", "j0", "j1", "jn", "y0", "y1", "yn",
+     # <stdlib.h>
+     "abort", "abs", "atexit", "atof", "atoi", "atol", "bsearch",
+     "calloc", "div", "exit", "free", "getenv", "labs", "ldiv", "malloc",
