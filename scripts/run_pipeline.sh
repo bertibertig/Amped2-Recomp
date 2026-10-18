@@ -20,7 +20,8 @@ SEED_ARGS=(); [ -f "$SEEDS" ] && SEED_ARGS=(--seed-functions "$SEEDS")
 # XONLINE/XNET for Xbox Live). With --text-only alone they are not swept linearly, only reached via calls –
 # functions get cut off in the middle (SSX 3: D3D device init → device creation failed, see docs/notes.md).
 # Default: every preloaded section whose name does not start with "." (XBE "X" flags are set on .rdata/.data
-# too, so they are useless here), from the parse output. DOLBY stays out: DSP code, not x86.
+# too, so they are useless here), from the parse output. Not code: DOLBY (DSP code), XON_RD (XOnline strings/data,
+# Amped 2) – extend NOT_CODE when another title brings more data sections.
 # Check the printed list against the parse output and docs/notes.md.
 # Override with XDK_SECTIONS="A,B,C".
 ANALYSIS="${XBE%.xbe}_analysis.json"
@@ -29,7 +30,7 @@ if [ -z "${XDK_SECTIONS:-}" ] && [ -f "$ANALYSIS" ]; then
 import json, sys
 secs = json.load(open(sys.argv[1]))["sections"]
 print(",".join(s["name"] for s in secs
-               if s["executable"] and "PRE" in s["flags"] and not s["name"].startswith((".", "$")) and s["name"] != "DOLBY"))
+               if s["executable"] and "PRE" in s["flags"] and not s["name"].startswith((".", "$")) and s["name"] not in ("DOLBY", "XON_RD")))
 PY
 )"
 fi
@@ -44,6 +45,7 @@ fi
 [[ "$STEP" =~ ^(all|abi)$    ]] && run python -m tools.abi_analysis "$XBE" -v   # do NOT skip!
 if [[ "$STEP" =~ ^(all|recomp)$ ]]; then
   mkdir -p "$GEN_DIR"
-  run python -m tools.recomp "$XBE" --all --split 250 --gen-dir "$GEN_DIR"
+  # Functions defined by hand in src/recomp_manual.c are not generated (their definition there links instead).
+  run python -m tools.recomp "$XBE" --all --split 250 --gen-dir "$GEN_DIR" --exclude-manual "$ROOT/src/recomp_manual.c"
 fi
 echo; echo "Done. Health report: scripts/doctor.sh"

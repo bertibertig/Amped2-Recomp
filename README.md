@@ -16,10 +16,13 @@ It follows the same route as SSX3-Recomp (our SSX 3 port with the same toolkit):
 | Milestone | |
 |---|---|
 | Repo, toolkit (xboxrecomp v0.14.0 + our runtime patch), scripts | ✅ |
-| Game data in `game_files/` | ⬜ next step |
-| Pipeline: parse, disasm, func_id, abi_analysis, recomp | ⬜ |
-| Host, Vulkan renderer, input (ported from SSX3-Recomp), first build | ⬜ |
-| Boot → logos → front end → riding | ⬜ |
+| Game data in `game_files/` (PAL, title ID 0x4D530041, XDK 5558) | ✅ |
+| Pipeline: 14,365 functions lifted, 0 translation errors, 1.96 M lines of C | ✅ |
+| Host and input ported from SSX3-Recomp, Linux build (CPU renderer, multi-threaded) | ✅ |
+| Boot: XAPI (media check bypassed), D3D, XACT/WMA audio, XNet offline, splash screen | ✅ |
+| Movies through the NV2A video overlay (MGS logo) | 🟡 shown, but at ~1/6 speed |
+| Front end → riding | ⬜ |
+| Vulkan renderer | ⬜ after the CPU path works |
 
 Plan and open items: [docs/TODO.md](docs/TODO.md), running log: [docs/notes.md](docs/notes.md).
 

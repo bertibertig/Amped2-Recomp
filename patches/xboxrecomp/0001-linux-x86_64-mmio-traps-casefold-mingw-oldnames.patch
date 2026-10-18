@@ -96,11 +96,38 @@ index 235140f..c223d57 100644
  
  #if !defined(_WIN32) && defined(__aarch64__)
  /* POSIX arm64: the same hook over sigaction + ucontext, with the A64 decoder
+diff --git a/src/kernel/CMakeLists.txt b/src/kernel/CMakeLists.txt
+index c643f72..157256b 100644
+--- a/src/kernel/CMakeLists.txt
++++ b/src/kernel/CMakeLists.txt
+@@ -26,6 +26,7 @@ set(KERNEL_SOURCES
+     recomp_trace.c
+     nv2a_pb_scan.c
+     nv2a_pb_exec.c
++    nv2a_overlay.c
+     nv2a_vsh_interp.c
+     nv2a_combiner.c
+ )
 diff --git a/src/kernel/kernel_bridge.c b/src/kernel/kernel_bridge.c
-index 965dd08..3176c4b 100644
+index 965dd08..7fae54f 100644
 --- a/src/kernel/kernel_bridge.c
 +++ b/src/kernel/kernel_bridge.c
-@@ -2723,8 +2723,13 @@ static void kernel_vblank_tick(void)
+@@ -2689,6 +2689,7 @@ static int kernel_raise_interrupt(uint32_t vector)
+  * refresh rate from this will read 60; a title that needs the real one wants
+  * the mode AvSetDisplayMode was given, which is recorded a few files away.
+  */
++#include "nv2a_overlay.h"
+ #define XBOX_NV2A_REG_BASE     0xFD000000u
+ #define NV2A_PMC_INTR_0        0x00000100u
+ #define NV2A_PMC_INTR_PCRTC    (1u << 24)
+@@ -2720,11 +2721,20 @@ static void kernel_vblank_tick(void)
+     next_ms = now + 16;                       /* ~60 Hz */
+     InterlockedIncrement(&g_vblank_total);
+ 
++    /* The video overlay latches its pending buffer at the vblank, whether
++     * or not the title has an interrupt connected (nv2a_overlay.h). */
++    nv2a_overlay_vblank();
++
      if (!xbox_GetConnectedInterrupt(NV2A_VECTOR))
          return;
  
@@ -277,6 +304,345 @@ index 327f01d..caeb766 100644
  } Nv2aBatch;
  
  typedef struct {
+diff --git a/src/kernel/nv2a_overlay.c b/src/kernel/nv2a_overlay.c
+new file mode 100644
+index 0000000..20a1b1f
+--- /dev/null
++++ b/src/kernel/nv2a_overlay.c
+@@ -0,0 +1,282 @@
++/*
++ * nv2a_overlay.c -- the NV2A video overlay (PVIDEO). See nv2a_overlay.h.
++ *
++ * The register aperture is plain memory here (writes are not trapped), so
++ * the title's register writes are simply there to read at the next vblank.
++ * Register layout (NV2A PVIDEO, as xemu documents it), two buffers i = 0/1:
++ *   0x8100 INTR          0x8140 INTR_EN
++ *   0x8700 BUFFER        bit 0 = buffer 0 pending, bit 4 = buffer 1 pending
++ *   0x8704 STOP          bit 0 = stop the overlay
++ *   0x8900 + 4i BASE     0x8908 + 4i LIMIT
++ *   0x8920 + 4i OFFSET   physical offset of the frame (added to BASE)
++ *   0x8928 + 4i SIZE_IN  height << 16 | width
++ *   0x8930 + 4i POINT_IN source origin, 12.4 fixed point (t << 16 | s)
++ *   0x8938 + 4i DS_DX    0x8940 + 4i DT_DY   source step per output pixel, 12.20
++ *   0x8948 + 4i POINT_OUT  y << 16 | x      0x8950 + 4i SIZE_OUT  h << 16 | w
++ *   0x8958 + 4i FORMAT   bits 0-12 pitch; bit 16 colour (1 = YUY2, 0 = UYVY);
++ *                        bit 20 display only where the framebuffer is the
++ *                        colour key
++ *   0x8B00 COLOR_KEY
++ *
++ * The frame is copied out at the latch: once the pending bit is clear the
++ * title may reuse the buffer, exactly as on the console.
++ *
++ * RECOMP_OVERLAY_DUMP=<prefix> writes every 30th latched frame to
++ * <prefix>NNNNN.bmp (converted, unscaled), to check movies without a display.
++ */
++#include "nv2a_overlay.h"
++
++#include <stddef.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++extern ptrdiff_t xbox_GetMemoryOffset(void);
++
++#define NV2A_REG_BASE        0xFD000000u
++#define PVIDEO_BUFFER        0x8700u
++#define PVIDEO_STOP          0x8704u
++#define PVIDEO_BASE(i)       (0x8900u + 4u * (i))
++#define PVIDEO_LIMIT(i)      (0x8908u + 4u * (i))
++#define PVIDEO_OFFSET(i)     (0x8920u + 4u * (i))
++#define PVIDEO_SIZE_IN(i)    (0x8928u + 4u * (i))
++#define PVIDEO_POINT_IN(i)   (0x8930u + 4u * (i))
++#define PVIDEO_DS_DX(i)      (0x8938u + 4u * (i))
++#define PVIDEO_DT_DY(i)      (0x8940u + 4u * (i))
++#define PVIDEO_POINT_OUT(i)  (0x8948u + 4u * (i))
++#define PVIDEO_SIZE_OUT(i)   (0x8950u + 4u * (i))
++#define PVIDEO_FORMAT(i)     (0x8958u + 4u * (i))
++#define PVIDEO_COLOR_KEY     0x8B00u
++
++#define FMT_PITCH_MASK       0x1FFFu
++#define FMT_COLOR_YUY2       (1u << 16)
++#define FMT_DISPLAY_KEYED    (1u << 20)
++
++/* Guest physical memory is reachable through the contiguous window. */
++#define CONTIG_WINDOW        0x80000000u
++#define MAX_W                1024u
++#define MAX_H                1024u
++
++static volatile uint32_t *reg(uint32_t off)
++{
++    return (volatile uint32_t *)((uintptr_t)(NV2A_REG_BASE + off)
++                                 + xbox_GetMemoryOffset());
++}
++
++#ifdef _WIN32
++#include <windows.h>
++static SRWLOCK s_lock_obj = SRWLOCK_INIT;
++#define LOCK()   AcquireSRWLockExclusive(&s_lock_obj)
++#define UNLOCK() ReleaseSRWLockExclusive(&s_lock_obj)
++#else
++#include <pthread.h>
++static pthread_mutex_t s_lock_obj = PTHREAD_MUTEX_INITIALIZER;
++#define LOCK()   pthread_mutex_lock(&s_lock_obj)
++#define UNLOCK() pthread_mutex_unlock(&s_lock_obj)
++#endif
++
++/* The latched frame. */
++static uint8_t  *s_px;               /* w * h * 2 bytes, packed */
++static uint32_t  s_w, s_h, s_yuy2, s_keyed, s_key;
++static uint32_t  s_out_x, s_out_y, s_out_w, s_out_h;
++static uint32_t  s_in_s, s_in_t, s_ds_dx, s_dt_dy;
++static volatile uint64_t s_seq;
++static volatile int s_active;
++
++uint64_t nv2a_overlay_seq(void) { return s_seq; }
++int nv2a_overlay_active(void)   { return s_active; }
++
++static inline uint32_t clamp8(int v)
++{
++    return v < 0 ? 0u : v > 255 ? 255u : (uint32_t)v;
++}
++
++/* BT.601 studio range, as the NV2A's overlay converter. */
++static inline uint32_t yuv_to_xrgb(int y, int u, int v)
++{
++    int c = (y - 16) * 298, d = u - 128, e = v - 128;
++    return clamp8((c + 409 * e + 128) >> 8) << 16
++         | clamp8((c - 100 * d - 208 * e + 128) >> 8) << 8
++         | clamp8((c + 516 * d + 128) >> 8);
++}
++
++/* Pixel x of row `row` (packed 4:2:2, two pixels per 4 bytes). */
++static inline uint32_t fetch(const uint8_t *row, uint32_t x, uint32_t yuy2)
++{
++    const uint8_t *p = row + (x & ~1u) * 2u;
++    int y, u, v;
++    if (yuy2) {                               /* Y0 U Y1 V */
++        y = p[(x & 1u) ? 2 : 0]; u = p[1]; v = p[3];
++    } else {                                  /* U Y0 V Y1 */
++        y = p[(x & 1u) ? 3 : 1]; u = p[0]; v = p[2];
++    }
++    return yuv_to_xrgb(y, u, v);
++}
++
++static void dump_frame(void)
++{
++    static const char *prefix;
++    static int checked;
++    static unsigned n;
++    char path[512];
++    FILE *f;
++    uint32_t x, y, row_bytes, file_size;
++    uint8_t hdr[54];
++
++    if (!checked) {
++        checked = 1;
++        prefix = getenv("RECOMP_OVERLAY_DUMP");
++    }
++    if (!prefix || !*prefix || (s_seq % 30u) != 1u)
++        return;
++    snprintf(path, sizeof path, "%s%05u.bmp", prefix, n++);
++    f = fopen(path, "wb");
++    if (!f)
++        return;
++    row_bytes = (s_w * 3u + 3u) & ~3u;
++    file_size = 54u + row_bytes * s_h;
++    memset(hdr, 0, sizeof hdr);
++    hdr[0] = 'B'; hdr[1] = 'M';
++    memcpy(hdr + 2, &file_size, 4);
++    hdr[10] = 54; hdr[14] = 40;
++    memcpy(hdr + 18, &s_w, 4);
++    memcpy(hdr + 22, &s_h, 4);
++    hdr[26] = 1; hdr[28] = 24;
++    fwrite(hdr, 1, sizeof hdr, f);
++    for (y = s_h; y-- > 0;) {                 /* BMP rows bottom-up */
++        uint8_t line[MAX_W * 3u + 4u];
++        const uint8_t *row = s_px + (size_t)y * s_w * 2u;
++        memset(line, 0, row_bytes);
++        for (x = 0; x < s_w; x++) {
++            uint32_t c = fetch(row, x, s_yuy2);
++            line[x * 3u + 0] = (uint8_t)c;
++            line[x * 3u + 1] = (uint8_t)(c >> 8);
++            line[x * 3u + 2] = (uint8_t)(c >> 16);
++        }
++        fwrite(line, 1, row_bytes, f);
++    }
++    fclose(f);
++}
++
++void nv2a_overlay_vblank(void)
++{
++    uint32_t buffer, stop, i, fmt, size_in, w, h, pitch, src_va, y;
++    const uint8_t *src;
++
++    if (!xbox_GetMemoryOffset())
++        return;
++
++    stop = *reg(PVIDEO_STOP);
++    if (stop & 1u) {
++        /* The title switched the overlay off (D3DDevice_EnableOverlay(FALSE)
++         * / XMV teardown). Consume the command and stop showing it. */
++        *reg(PVIDEO_STOP) = 0;
++        *reg(PVIDEO_BUFFER) = 0;
++        if (s_active) {
++            s_active = 0;
++            s_seq++;
++        }
++        return;
++    }
++
++    buffer = *reg(PVIDEO_BUFFER);
++    if (!(buffer & 0x11u))
++        return;
++    i = (buffer & 0x10u) ? 1u : 0u;
++
++    fmt = *reg(PVIDEO_FORMAT(i));
++    size_in = *reg(PVIDEO_SIZE_IN(i));
++    w = size_in & 0x7FFu;
++    h = (size_in >> 16) & 0x7FFu;
++    pitch = fmt & FMT_PITCH_MASK;
++    src_va = CONTIG_WINDOW
++           | ((*reg(PVIDEO_BASE(i)) + *reg(PVIDEO_OFFSET(i))) & 0x07FFFFFFu);
++
++    /* The buffer is ours now: tell the title, as the hardware does. */
++    *reg(PVIDEO_BUFFER) = buffer & ~(i ? 0x10u : 0x01u);
++
++    if (!w || !h || w > MAX_W || h > MAX_H || pitch < w * 2u)
++        return;
++
++    LOCK();
++    if (!s_px)
++        s_px = (uint8_t *)malloc((size_t)MAX_W * MAX_H * 2u);
++    if (s_px) {
++        src = (const uint8_t *)((uintptr_t)src_va + xbox_GetMemoryOffset());
++        for (y = 0; y < h; y++)
++            memcpy(s_px + (size_t)y * w * 2u, src + (size_t)y * pitch,
++                   (size_t)w * 2u);
++        s_w = w;
++        s_h = h;
++        s_yuy2 = (fmt & FMT_COLOR_YUY2) != 0;
++        s_keyed = (fmt & FMT_DISPLAY_KEYED) != 0;
++        s_key = *reg(PVIDEO_COLOR_KEY);
++        s_out_x = *reg(PVIDEO_POINT_OUT(i)) & 0xFFFu;
++        s_out_y = (*reg(PVIDEO_POINT_OUT(i)) >> 16) & 0xFFFu;
++        s_out_w = *reg(PVIDEO_SIZE_OUT(i)) & 0xFFFu;
++        s_out_h = (*reg(PVIDEO_SIZE_OUT(i)) >> 16) & 0xFFFu;
++        s_in_s = *reg(PVIDEO_POINT_IN(i)) & 0xFFFFu;
++        s_in_t = (*reg(PVIDEO_POINT_IN(i)) >> 16) & 0xFFFFu;
++        s_ds_dx = *reg(PVIDEO_DS_DX(i));
++        s_dt_dy = *reg(PVIDEO_DT_DY(i));
++        if (!s_out_w) s_out_w = w;
++        if (!s_out_h) s_out_h = h;
++        if (!s_ds_dx) s_ds_dx = 1u << 20;
++        if (!s_dt_dy) s_dt_dy = 1u << 20;
++        s_active = 1;
++        s_seq++;
++        if (s_seq == 1)
++            fprintf(stderr, "  [OVERLAY] first frame: %ux%u %s pitch %u from 0x%08X "
++                            "-> %ux%u at (%u,%u)%s\n",
++                    w, h, s_yuy2 ? "YUY2" : "UYVY", pitch, src_va,
++                    s_out_w, s_out_h, s_out_x, s_out_y,
++                    s_keyed ? ", colour-keyed" : "");
++        dump_frame();
++    }
++    UNLOCK();
++}
++
++int nv2a_overlay_compose_xrgb(uint32_t *dst, uint32_t w, uint32_t h,
++                              uint32_t pitch_px)
++{
++    uint32_t ox, oy, x, y;
++    uint64_t s0, t;
++
++    if (!s_active || !dst)
++        return 0;
++    LOCK();
++    if (!s_px || !s_w || !s_h) {
++        UNLOCK();
++        return 0;
++    }
++    for (oy = 0; oy < s_out_h; oy++) {
++        y = s_out_y + oy;
++        if (y >= h)
++            break;
++        /* 12.4 origin + 12.20 step, in 12.20. */
++        t = ((uint64_t)s_in_t << 16) + (uint64_t)oy * s_dt_dy;
++        {
++            uint32_t sy = (uint32_t)(t >> 20);
++            const uint8_t *row;
++            uint32_t *out = dst + (size_t)y * pitch_px;
++            if (sy >= s_h)
++                sy = s_h - 1;
++            row = s_px + (size_t)sy * s_w * 2u;
++            s0 = (uint64_t)s_in_s << 16;
++            for (ox = 0; ox < s_out_w; ox++) {
++                uint32_t sx;
++                x = s_out_x + ox;
++                if (x >= w)
++                    break;
++                if (s_keyed && (out[x] & 0xFFFFFFu) != (s_key & 0xFFFFFFu))
++                    continue;
++                sx = (uint32_t)((s0 + (uint64_t)ox * s_ds_dx) >> 20);
++                if (sx >= s_w)
++                    sx = s_w - 1;
++                out[x] = fetch(row, sx, s_yuy2);
++            }
++        }
++    }
++    UNLOCK();
++    return 1;
++}
+diff --git a/src/kernel/nv2a_overlay.h b/src/kernel/nv2a_overlay.h
+new file mode 100644
+index 0000000..d4ab713
+--- /dev/null
++++ b/src/kernel/nv2a_overlay.h
+@@ -0,0 +1,45 @@
++/*
++ * nv2a_overlay.h -- the NV2A video overlay (PVIDEO), as far as titles use it.
++ *
++ * The XDK shows movies through the overlay, not through the 3D pipe:
++ * D3DDevice_UpdateOverlay writes a YUY2/UYVY surface's offset, size, scale and
++ * format into the PVIDEO registers and sets a "buffer pending" bit;
++ * the hardware latches that buffer at the next vblank, clears the bit, and
++ * D3DDevice_GetOverlayUpdateStatus reports "ready for the next frame". XMV
++ * (the XDK's WMV9 player) waits for exactly that. Nothing flips meanwhile, so
++ * a presenter that only follows flips shows a frozen screen.
++ *
++ * nv2a_overlay_vblank() is the latch (called from the vblank tick); the
++ * presenters ask nv2a_overlay_compose_xrgb() to draw the latched frame over
++ * the framebuffer they are about to show.
++ */
++#ifndef NV2A_OVERLAY_H
++#define NV2A_OVERLAY_H
++
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* Latch a pending overlay buffer (copying the frame out of guest memory) and
++ * clear its pending bit. Call once per emulated vblank. */
++void nv2a_overlay_vblank(void);
++
++/* Latches so far; changes whenever a new overlay frame arrived. */
++uint64_t nv2a_overlay_seq(void);
++
++/* 1 while an overlay frame is being shown (until the title stops it). */
++int nv2a_overlay_active(void);
++
++/* Draw the latched frame into a 32-bit XRGB8888 image of w x h pixels
++ * (pitch in pixels), scaled to the title's output rectangle, honouring the
++ * colour key when the title enabled it. Returns 1 if anything was drawn. */
++int nv2a_overlay_compose_xrgb(uint32_t *dst, uint32_t w, uint32_t h,
++                              uint32_t pitch_px);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* NV2A_OVERLAY_H */
 diff --git a/src/kernel/nv2a_pb_exec.c b/src/kernel/nv2a_pb_exec.c
 index 1280565..71b340d 100644
 --- a/src/kernel/nv2a_pb_exec.c
@@ -1361,8 +1727,70 @@ index d45d8bb..92cd7aa 100644
          fprintf(stderr, "  [OHCI%d] undecoded access at +0x%03X: "
                          "%02X %02X %02X %02X %02X %02X\n",
                  hc->index, xbox_va - hc->base,
+diff --git a/src/video/fb_present_sdl.c b/src/video/fb_present_sdl.c
+index 87b7ef7..3aead9d 100644
+--- a/src/video/fb_present_sdl.c
++++ b/src/video/fb_present_sdl.c
+@@ -48,6 +48,7 @@
+ #include "keyboard_sdl.h"     /* src/input: keys into the pad stand-in */
+ 
+ extern ptrdiff_t xbox_GetMemoryOffset(void);
++#include "../kernel/nv2a_overlay.h"   /* the video overlay (movies) */
+ extern void xbox_InputSetMainPump(int on);   /* src/input/xinput_device.c */
+ extern int  xbox_InputAnyOpen(void);
+ 
+@@ -356,7 +357,7 @@ int xbox_HostWindowMain(int (*guest_main)(void))
+         /* Before the first flip, poll at the display rate: the window then
+          * reads the display surface itself. After, the flip's event wakes
+          * the loop. */
+-        if (SDL_WaitEventTimeout(&ev, shown_seq ? 100 : 16)) {
++        if (SDL_WaitEventTimeout(&ev, shown_seq && !nv2a_overlay_active() ? 100 : 16)) {
+             do {
+                 /* Keys for the pad stand-in, and the window events that
+                  * release them; it only reads the event. */
+@@ -395,6 +396,40 @@ int xbox_HostWindowMain(int (*guest_main)(void))
+             if (bpp == 2 || bpp == 4)
+                 px = (const uint8_t *)((uintptr_t)s_fb_va + xbox_GetMemoryOffset());
+         }
++        /* The video overlay (XMV movies) sits on top of whatever surface is
++         * shown, and changes without any flip: compose it into a copy at
++         * every new overlay frame. */
++        {
++            static uint32_t ov_buf[FB_W * FB_H];
++            static uint64_t ov_shown;
++            uint64_t ov = nv2a_overlay_seq();
++            if (nv2a_overlay_active() && (px || ov != ov_shown)) {
++                uint32_t i, n = FB_W * FB_H;
++                const uint8_t *base = px ? px : (s_slot[s_front].px && shown_seq
++                                                 ? s_slot[s_front].px : NULL);
++                uint32_t bbpp = px ? bpp : s_slot[s_front].bpp;
++                uint32_t bpitch = px ? pitch : FB_W * bbpp;
++                if (base && bbpp == 4) {
++                    for (i = 0; i < FB_H; i++)
++                        memcpy(ov_buf + i * FB_W, base + (size_t)i * bpitch, FB_W * 4u);
++                } else if (base && bbpp == 2) {
++                    for (i = 0; i < n; i++) {
++                        uint16_t c = *(const uint16_t *)(base + (size_t)(i / FB_W) * bpitch
++                                                         + (i % FB_W) * 2u);
++                        ov_buf[i] = ((uint32_t)(c >> 11) * 255u / 31u) << 16
++                                  | ((uint32_t)((c >> 5) & 63u) * 255u / 63u) << 8
++                                  | (uint32_t)(c & 31u) * 255u / 31u;
++                    }
++                } else {
++                    memset(ov_buf, 0, sizeof ov_buf);
++                }
++                nv2a_overlay_compose_xrgb(ov_buf, FB_W, FB_H, FB_W);
++                ov_shown = ov;
++                px = (const uint8_t *)ov_buf;
++                bpp = 4;
++                pitch = FB_W * 4u;
++            }
++        }
+         if (px) {
+             if (!tex || bpp != tex_bpp) {
+                 if (tex)
 diff --git a/tools/recomp/lifter.py b/tools/recomp/lifter.py
-index baf1834..e5fa79c 100644
+index baf1834..3828298 100644
 --- a/tools/recomp/lifter.py
 +++ b/tools/recomp/lifter.py
 @@ -87,6 +87,12 @@ _FUNC_RESERVED_IDENT = frozenset({
@@ -1378,3 +1806,56 @@ index baf1834..e5fa79c 100644
      # <stdlib.h>
      "abort", "abs", "atexit", "atof", "atoi", "atol", "bsearch",
      "calloc", "div", "exit", "free", "getenv", "labs", "ldiv", "malloc",
+@@ -97,6 +103,34 @@ _FUNC_RESERVED_IDENT = frozenset({
+     "atoll", "llabs", "lldiv", "strtof", "strtold", "strtoll", "strtoull",
+     # <setjmp.h>
+     "longjmp", "setjmp",
++    # POSIX I/O, <stdio.h>, <time.h>, <ctype.h>, <wchar.h>, <signal.h>.
++    # Worse than a compile error on POSIX hosts: the executable is linked with
++    # -rdynamic (ENABLE_EXPORTS, for dladdr in the crash handler), and an
++    # exported definition interposes the libc one for *every* caller in the
++    # process, shared libraries included. Amped 2's CRT carries `read`,
++    # `write`, `close`, `lseek`, `isatty`, `tzset`, `fsopen` under exactly
++    # those FidDb names; SDL's D-Bus connection then called the guest's
++    # `read` and crashed before the title's entry point ran.
++    "read", "write", "close", "open", "creat", "lseek", "isatty", "dup",
++    "dup2", "pipe", "unlink", "access", "chmod", "chdir", "getcwd",
++    "mkdir", "rmdir", "fileno", "fdopen", "fsopen", "stat", "fstat",
++    "sleep", "umask", "getpid", "commit",
++    "fopen", "freopen", "fclose", "fflush", "fread", "fwrite", "fseek",
++    "ftell", "rewind", "fgetpos", "fsetpos", "feof", "ferror", "clearerr",
++    "fgetc", "fgets", "fputc", "fputs", "getc", "getchar", "gets", "putc",
++    "putchar", "puts", "ungetc", "printf", "fprintf", "sprintf",
++    "snprintf", "vprintf", "vfprintf", "vsprintf", "vsnprintf", "scanf",
++    "fscanf", "sscanf", "remove", "rename", "tmpfile", "tmpnam",
++    "setbuf", "setvbuf", "perror",
++    "time", "clock", "mktime", "difftime", "gmtime", "localtime",
++    "asctime", "ctime", "strftime", "tzset",
++    "isalnum", "isalpha", "iscntrl", "isdigit", "isgraph", "islower",
++    "isprint", "ispunct", "isspace", "isupper", "isxdigit", "tolower",
++    "toupper",
++    "wcslen", "wcscpy", "wcsncpy", "wcscat", "wcsncat", "wcscmp",
++    "wcsncmp", "wcschr", "wcsrchr", "wcsstr", "wcstol", "wcstoul",
++    "wcstod", "towlower", "towupper", "swprintf", "vswprintf",
++    "signal", "raise",
+     # Host Win32 API export names (data/win32_api_names.txt) so a guest
+     # function named like a linked import does not collide at link time.
+ }) | _WIN32_EXPORTS
+diff --git a/tools/recomp/translator.py b/tools/recomp/translator.py
+index 6a7f44c..7941012 100644
+--- a/tools/recomp/translator.py
++++ b/tools/recomp/translator.py
+@@ -2657,8 +2657,12 @@ class FunctionTranslator:
+         # sub_000EEA10 in Wreckless is exactly `bsf eax, ecx; ret`.
+         # cmpxchg belongs here too: it snapshots the compare it performed,
+         # because eax may be replaced before the branch reads the result.
++        # So does "lock xadd": the atomic lowering publishes the sum into
++        # _fa/_fas, and capstone names the locked form "lock xadd", which the
++        # bare "xadd" in _RESULT_SNAPSHOT_SETTERS does not match (Amped 2:
++        # an InterlockedIncrement-only function failed to compile).
+         if any(insn.mnemonic in ("cmp", "test", "bsf", "bsr", "cmpxchg",
+-                                 "lock cmpxchg", "inc", "dec", "sahf", "fcomi",
++                                 "lock cmpxchg", "lock xadd", "inc", "dec", "sahf", "fcomi",
+                                  "fcomip", "fcompi", "fucomi", "fucomip", "fucompi")
+                or insn.mnemonic in _RESULT_SNAPSHOT_SETTERS
+                for insn in instructions):

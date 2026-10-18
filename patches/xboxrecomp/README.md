@@ -68,6 +68,17 @@ All of them are candidates for an upstream PR to sp00nznet/xboxrecomp.
   took pitch != 0 for "linear" -- after the intro, the title screen sampled the corner of its textures (only the sky
   was left).
 
+- `tools/recomp/translator.py`: declare the `_fa/_fb/_fas/_fbs` flag temporaries for functions containing
+  `lock xadd` too (Amped 2: functions whose only flag setter is InterlockedIncrement did not compile).
+- `tools/recomp/lifter.py` (`_FUNC_RESERVED_IDENT`): POSIX I/O, stdio, time, ctype, wchar and signal names. On POSIX the
+  executable is linked with -rdynamic, so a generated function called `read`/`write`/`close` (Amped 2's CRT, FidDb names)
+  interposed libc for the whole process and SDL's D-Bus connection crashed into guest code.
+- `src/kernel/nv2a_overlay.c/.h` (new), `kernel_bridge.c` (`kernel_vblank_tick`), `src/video/fb_present_sdl.c`:
+  **NV2A video overlay (PVIDEO)**. XDK titles show XMV movies through D3DDevice_UpdateOverlay, not through flips. The
+  vblank latches a pending overlay buffer (frame copied out of guest memory, BUFFER bit cleared as the hardware does,
+  STOP honoured); the SDL window composes it over the shown surface (YUY2/UYVY, scaling, colour key).
+  `RECOMP_OVERLAY_DUMP=<prefix>` dumps every 30th frame. Not yet in the GDI window (fb_present.c).
+
 Verified: Linux build + Windows cross build (MinGW) compile; own decoder test (8 cases, ucontext) green;
 `tools.recomp.test_reserved_idents` green; SSX 3 on Linux reaches the same state as under Proton
 (APU/AC'97/DSP doorbell/APU interrupts, intro videos are opened).

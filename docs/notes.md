@@ -1,31 +1,62 @@
 # Amped2-Recomp work log
 
 ## Game version
-_(fill in from `scripts/extract_iso.sh` and `scripts/run_pipeline.sh parse`)_
-
 | Field | Value |
 |---|---|
-| Region / version / build date | |
-| Languages | |
-| default.xbe SHA-1 | |
-| Title ID | |
-| Base address / image size | |
-| Entry point / kernel thunk / TLS index | |
-| .text size / functions | |
-| XDK version (per library) | |
-| Kernel imports | |
-| XDK sections swept by disasm | |
+| Title / region | "Amped 2", region "Rest of World" (PAL/EU), media DVD_X2, disc 0, cert. version 2 |
+| Build | 2003-10-03 05:49:49 UTC, certificate 2003-10-07; path `c:\depot\yeti\dailybuild\Temp\Release\YetiGame\Default.exe` (engine code name "Yeti") |
+| Languages | English, French, German, Japanese (`Audio/XACTData/*`, `splash_{eng,fre,ger,jan}.xpr`) |
+| default.xbe SHA-1 | `38e63cd016bf084d999e0a911933a52191bfc378` (3,710,976 B). Certificate unmodified (region 0x4, media flags 0x2 – unlike the softmod-patched SSX 3 XBE), so most likely a clean dump |
+| Title ID | 0x4D530041 ("MS" 0x41) |
+| Base address / image size | 0x00010000 / 0x003E9520 (4,101,408) |
+| Entry point / kernel thunk / TLS index | 0x00254899 / 0x00336DE0 / 0x00388C34 (TLS zero fill 272 B, no TLS data) |
+| Stack commit / heap | 0x10000 / reserve 0x100000, commit 0x1000 |
+| .text size | 2,611,764 B |
+| XDK version | 5558 for all libraries – the same as SSX 3, so the XDK-level findings should apply |
+| Libraries | XAPILIB, XBOXKRNL, LIBCMT, DSOUND, XONLINES, XVOICE, XMV, D3D8LTCG, XGRAPHCL, XACTENLT |
+| Kernel imports | 158 |
+| .text / functions | 14,365 functions (14,488 translated incl. aliases), 1.96 M lines of C |
+| XDK sections swept by disasm | DSOUND, XONLINE, XNET, XMV, WMADEC, XACTENG, XGRPH, D3D, XPP (each checked: starts with x86 code) |
+
+Note: D3D8**LTCG** – the D3D library is built with link-time code generation, so its functions may be inlined into
+game code and their shapes differ from SSX 3's (plain D3D8). XGRAPHCL/XACTENLT are the "LT" variants as well.
+
+Other XBEs on the disc (not ported, same title ID):
+| File | What | Build |
+|---|---|---|
+| Boom.xbe | Second game executable, `c:\depot\yeti\dev\source\Boom\Release\Boom.exe` – role unknown (relaunched by default.xbe?) | 2003-09-17 |
+| cdx.xbe | Microsoft "CDX" demo/extras launcher (`cdxmedia/`: videos, demos, music) | 2003-06-01 |
+| dashupdate.xbe, update.xbe | Xbox Live dashboard / title updater | 2003-06-01 |
+
+Data: XACT audio (`.xwb`/`.xsb`), 317 `.wma` music tracks (decoded by WMADEC in the XBE), 60 `.xmv` movies
+(XMV player in the XBE), `.xpr` resources, `.res`/`.gfx`/`.tex` game formats.
 
 ## Sections (xbe_parser)
 | Name | VA | VSize | Flags |
 |---|---|---|---|
+| .text | 0x00011000 | 2,611,764 | PRE, X, HRO |
+| DSOUND | 0x0028EA40 | 55,276 | W, PRE, X |
+| XONLINE | 0x0029C240 | 127,700 | PRE, X, TRO |
+| XNET | 0x002BB520 | 73,704 | PRE, X, HRO |
+| XMV | 0x002CD520 | 163,156 | W, PRE, X |
+| WMADEC | 0x002F5280 | 102,524 | W, PRE, X |
+| XACTENG | 0x0030E300 | 43,200 | W, PRE, X |
+| XGRPH | 0x00318BC0 | 5,076 | W, PRE, X |
+| D3D | 0x00319FA0 | 82,284 | W, PRE, X |
+| XPP | 0x0032E120 | 36,008 | W, PRE, X |
+| .rdata | 0x00336DE0 | 236,376 | PRE, X |
+| .data | 0x00370940 | 512,916 (raw 99,032 → BSS part) | W, PRE, X |
+| DOLBY | 0x003EDCE0 | 29,056 | PRE, X, TRO – DSP code, not x86 |
+| XON_RD | 0x003F4E60 | 6,864 | PRE, X, HRO – XOnline data (Xbox Live host names), not code |
+| .data1 | 0x003F6940 | 224 | W, PRE, X |
+| $$XTIMAGE / .XTLID | 0x003F6A20 / 0x003F8A40 | | resources |
 
 ## Checklist
 - [ ] `scripts/setup.sh` run (venv, capstone); Linux deps (`xboxrecomp/tools/linux/install_deps.sh`)
-- [ ] Disc copied/extracted to `game_files/`, `default.xbe` present, SHA-1 recorded
-- [ ] Is `default.xbe` an original or patched (region/media flags, softmod patches)? Compare with a clean dump if possible
-- [ ] `parse` run, values filled in above
-- [ ] disasm / names / func_id / **abi_analysis** / recomp successful, `scripts/doctor.sh` read
+- [x] Disc copied/extracted to `game_files/`, `default.xbe` present, SHA-1 recorded
+- [x] `default.xbe` looks original (certificate region/media flags untouched; code not compared against a second dump)
+- [x] `parse` run, values filled in above
+- [x] disasm / names / func_id / **abi_analysis** / recomp successful, `scripts/doctor.sh` read
 - [ ] Host, CMake, build/run scripts ported from SSX3-Recomp; first build compiles
 - [ ] First start: logos / intro / front end / riding
 
@@ -95,3 +126,91 @@ _(date – what was done, what was found, next step)_
 - 2026-10-18 – Repo created: xboxrecomp v0.14.0 submodule (eb0aa1d, same as SSX3-Recomp), runtime patch 0001 from
   SSX3-Recomp (applies cleanly), scripts adapted (`extract_iso.sh` accepts an image or an extracted folder; XDK sections
   derived from the parse output instead of SSX 3's fixed list). Next step: copy the game data, run `parse`.
+- 2026-10-18 – **parse + pipeline** (logs `logs/01_parse.log` … `07_doctor.log`, gitignored). Values above.
+  - `XON_RD` is listed with the X flag but holds XOnline data (Xbox Live host-name format strings) → added to the
+    not-code list in `run_pipeline.sh`. The other 9 non-dot sections all start with plausible x86 (checked with capstone).
+  - Careful: piping `run_pipeline.sh` into `head` kills the parser with SIGPIPE before it writes the JSON.
+  - disasm (with the 9 XDK sections): 1,111,847 instructions (.text 867,835; XONLINE 43,921; XMV 65,783; WMADEC 38,442;
+    D3D 21,761; DSOUND 18,956; XACTENG 15,596; XNET 25,583; XPP 12,051; XGRPH 1,919), 214,116 xrefs (2,161 kernel calls),
+    **14,365 functions**. Full pipeline 11:15 min.
+  - func_id: 0 RenderWare (own "Yeti" engine), 11 CRT, 7,640 game_vtable, 929 game_network, 809 game_audio, 386 game_ui,
+    290 game_render, 7,178 unknown. abi_analysis: 14,365 entries, 2,569 thiscall.
+  - recomp (`--split 250`): 14,488/14,488 translated, **0 failed**, 1,955,105 lines, 58 files, 7 unresolved call targets,
+    47 unimplemented instructions.
+  - The 7 unresolved targets are all decode artefacts: 0xE807B7BF/0xE82FE861/0x010FE869 lie outside the image,
+    0x00066EDF/0x00087106 are in data decoded as code (`sub_00066890`/`sub_00087060`, full of in/out), 0x00227A85 is
+    mid-instruction, 0x00258FF6 the `pop esi; ret 4` tail of a function – all reached only via `jo`/`jp`/`js` from garbage.
+  - Unimplemented instructions (addresses in `xboxrecomp/tools/recomp/output/summary.json`, decimal there): most are in
+    data decoded as code (in/out/bound/aad/aam/les/salc/verw/ltr in low .text). Real ones to watch during bring-up:
+    `cpuid` in `sub_0026A2F0` (CRT CPU feature check – an override may be needed), cli/sti in `sub_002563B8` (XAPI) and
+    `sub_003349E4` (XPP), `sub_00258E14` (cli/sgdt/ljmp – reboot path, irrelevant), `wbinvd` in `sub_0031F8C0` (D3D,
+    no-op is fine), pushfd/popfd in `sub_002BE3A5` (XNET).
+  - Ghidra (`scripts/ghidra.sh`, 5:49 min): 10,321 functions, 108,079 symbols; merge: 2,028 names (190 FidDb/library,
+    1,838 symbol), **190 applied** (CRT: memmove, sprintf, rand …), pipeline re-run from `names` (2:41 min), same counts.
+  - doctor: only item "47 unimplemented instructions". Next step: port host/CMake/scripts from SSX3-Recomp, first build.
+- 2026-10-18 – **First build and starts (CPU renderer).** Host ported from SSX3-Recomp: `CMakeLists.txt` (target
+  `amped2_recomp`, no Vulkan yet), `src/main.c` (entry 0x00254899; SSX 3's fence mirror and boot-movie mask removed),
+  `src/recomp_manual.c`, `src/input/host_pad.c` (= SSX3's pad code, `AMPED2_PAD_TRACE`/`AMPED2_PAD_DB`),
+  `scripts/build.sh`, `run.sh` (defaults: KEVENTS, VBLANK, AC97_READY, PB_EXEC, FB_WINDOW, USB, KEYBOARD),
+  `build_win.sh`, `run_win.sh`.
+  - Build 1 failed: `_fa`/`_fas` undeclared in functions whose only flag setter is `lock xadd` (InterlockedIncrement,
+    e.g. `sub_000135D0`): capstone calls it "lock xadd", the translator's declaration check only knew "xadd".
+    Fixed in `tools/recomp/translator.py` (runtime patch). Then: build 1:13 min (12 jobs), binary 26 MB.
+  - Start 1: SIGSEGV before `boot_and_run` printed anything, inside SDL's D-Bus init. Ghidra/FidDb named seven CRT
+    functions `read`, `write`, `close`, `lseek`, `isatty`, `tzset`, `fsopen`; with `-rdynamic` the executable's exports
+    interpose libc for every caller, so D-Bus called the guest's `read`. Fixed by reserving POSIX/stdio/time/ctype/wchar
+    names in `tools/recomp/lifter.py` (`_FUNC_RESERVED_IDENT`, runtime patch) – they now get the `_<addr>` suffix.
+    Check after every rename pass: `nm -D --defined-only build/amped2_recomp` against libc/libSDL2 exports.
+  - Start 2: XAPI exits through `XLaunchNewImage(NULL)` → `HalReturnToFirmware(2)` (back to the dashboard) before main().
+    `FUN_00255202` (called from 0x002553DC) is the media check: MODE SENSE page 0x3E passes (runtime), but the cert
+    dword at +0x1D8 has bit 0 set, so XAPI also reads the security sectors (READ DVD STRUCTURE 0xAD, 0x664 B) and checks
+    a SHA-1 over them against the certificate (`FUN_0025514B`) – impossible without a drive. SSX 3's XBE had a softmod
+    patch at the same spot. Fix: hand-written `sub_00255202` in `src/recomp_manual.c` returning STATUS_SUCCESS;
+    `run_pipeline.sh` now passes `--exclude-manual src/recomp_manual.c` so hand-written bodies replace generated ones
+    for direct calls too. `recomp_manual.c` includes `recomp/gen/recomp_types.h` (TLS registers) instead of own externs.
+  - Start 3: past XAPI init (TDATA/UDATA, TitleMeta/TitleImage, `z:` cache partition). Worker thread start
+    0x00259939 (CRT `_threadstart`, after `int3`, SEH prolog) unknown → seeds via `tools.seed_from_log`
+    (`config/seed_functions.json`: 0x00254825, 0x00259939).
+  - Start 4 (with seeds, pipeline 19 min): the game copies `d:\image.res`, `guipackages\*.rui[rr]`, `gameinfo.res`,
+    `levels.res` to the `z:` cache (the `.res` files are ZIP archives), creates the D3D device (contiguous 14 MB + 1.3 MB
+    + 800 KB, `KeConnectInterrupt` vector 3 → ISR 0x003220C0), the executor follows the pushbuffer (DMA_PUT moves).
+    Then `[ICALL] Failed to resolve 0x0031CB60` (D3D section, after a `ret 4`, referenced from the D3D pointer table at
+    0x00329858) and no further frames. Seeded (3 seeds); a static scan of that table found no other missing targets.
+    `[0x0032CEF8]` looks like the D3D global device pointer (put/limit at +0/+4) – the candidate for a fence mirror.
+  - `wbinvd` at 0x0031FFEF (D3D) is reached – a cache flush, harmless as a no-op.
+- 2026-10-18 – **D3D fence, memory, network, first picture.**
+  - Start 5 (3 seeds): no ICALL gap, but no frame. gdb (with `set disable-randomization off` – without ASLR the
+    run faults at guest VA 0 in `sub_00256354`, a gdb artefact): the game thread spins in `sub_0031E7E0` =
+    D3D_BlockOnFence, device pointer `[0x0032CEF8]`, fence counter +0x2C, fence word pointer +0x30 – the SSX 3 layout.
+    → `xbox_Nv2aMirrorFence(0x0032CEF8, 0x2C, 0x30)` in `src/main.c`.
+  - Start 7: shaders, DSP image (`audio\DSP\yetidsp.bin`), WMA music, XACT banks load; then the contiguous arena runs
+    out and the game launches **`Boom.xbe`** (`XLaunchNewImage("\Device\CdRom0;Boom.xbe")`) – Boom is its error
+    screen. `FUN_00139640` probes the largest free contiguous block (60 MB down in 8 KB steps, 0x0013A181), frees it,
+    takes 8 KB less, and frees that again – but the runtime only releases contiguous memory with
+    **`RECOMP_HEAP_RECLAIM=1`** (`frees=0` in every `[CONTIG]` line). Now a default in `run.sh`/`run_win.sh`.
+  - Start 9: XAPI/XACT/USB fine, splash screen drawn, then 150 M calls each to KeRaiseIrqlToDpcLevel/KfLowerIrql:
+    perf (`perf record -e cycles:u -g --user-callchains`; plain `-g` is refused at perf_event_paranoid=2) → hot spot
+    `sub_002BEE4D` (XNET). Breakpoint backtraces: game thread `sub_00026770` → `sub_001CA300` → `sub_001BE680`:
+    `while (XNetGetTitleXnAddr(&x) == XNET_GET_XNADDR_PENDING);` (0x001BE997) – no NIC, so XNet never comes up.
+    → hand-written `sub_002BB66E` (XNetGetTitleXnAddr stub) returns XNET_GET_XNADDR_NONE (1) with the XNADDR zeroed,
+    what the original returns itself when XNet is not running (0x002BB570) – an offline console without a cable.
+  - **First picture**: the Amped 2 splash (`splash_eng.xpr`, 512x512 DXT1, full-screen quad) is correct in the CPU
+    rasteriser dumps (`RECOMP_FB_DUMP=logs/fb/f RECOMP_FB_DUMP_FLIPS=1`). The POSIX rasteriser pool runs
+    (`[GPU] rasteriser: 12 thread(s)`).
+  - **Movies use the NV2A video overlay**, not the 3D pipe: `d:\Movies\mgs.xmv` (640x480, 10.2 s, six WMA tracks at
+    44.1 kHz) is decoded by the XMV section (`sub_002CE5BB` …) and handed to D3DDevice_UpdateOverlay – PVIDEO registers
+    (gdb dump): BUFFER 1, OFFSET(0) 0x01F17100, SIZE_IN/OUT 640x480, FORMAT 0x00010500 (pitch 1280, YUY2). No flips
+    happen meanwhile, and the runtime had no overlay at all (the aperture is plain memory). New runtime module
+    `src/kernel/nv2a_overlay.c` (runtime patch): latches the pending buffer at every vblank (copies the frame, clears
+    the BUFFER bit as the hardware does – GetOverlayUpdateStatus waits on it), honours STOP; the SDL window composes
+    it (YUY2/UYVY → XRGB, scaling, colour key) over the shown surface. `RECOMP_OVERLAY_DUMP=<prefix>` writes every
+    30th frame as BMP. The MGS logo movie now shows correctly.
+  - **Open: movies run at ~1/6 speed.** The game calls UpdateOverlay every vblank (~53/s), but after 40 s only 2.65 of
+    4.34 MB are read; the guest main thread mostly sits in D3DDevice_BlockUntilVerticalBlank (`sub_0031AE90`), XMV
+    decode costs ~2 % CPU. Most likely XMV paces video to the DirectSound stream clock and the emulated APU/stream
+    voices advance too slowly (six audio tracks; DSP is a passthrough stub; the title loads its own DSP image).
+    Next: trace the XMV audio stream (packets submitted/completed per second), compare with 44.1 kHz.
+  - Other notes: XPP class-driver callbacks 0x0032E3A4, 0x0032EDAB, 0x003306DF are still unresolved ICALLs (seed them
+    with the next disasm run); `T:\PrevSessionInfo.lua`, `TDATA\FFFE0000\MUSIC\ST.DB` (dashboard soundtracks) and three
+    SFX files are not found – expected (not on the disc / no soundtracks).
+    The runtime's `nv2a_ack_thread` busy-polls (`sched_yield` + GetTickCount, ~50 % of one core), as in SSX3-Recomp.
