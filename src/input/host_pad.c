@@ -49,9 +49,8 @@
  *   multiplayer; stick deadzone/sensitivity and trigger thresholds as
  *   options. The game has its own key map files (config\input*.map on the
  *   disc) -- check whether rebinding in-game is possible before building one.
- * TODO(input): Rumble. xbox_InputSetState() works, but the emulated USB pad
- *   only counts the game's rumble OUT reports on endpoint 2 (ohci.c) instead
- *   of passing them here; needs a runtime patch.
+ * Rumble: the emulated USB pad passes the game's output reports here
+ *   (usb_gamepad_output, runtime patch); left motor = low frequency.
  */
 
 #include "xinput_xbox.h"
@@ -221,6 +220,18 @@ static void trace_state(DWORD port, const XBOX_INPUT_STATE *s)
     fflush(stderr);
 }
 
+/* The game's own keys on top of the runtime's keyboard map
+ * (src/input/amped2_keys.c), added to whatever the keyboard pad holds. */
+void game_keys_merge(XBOX_INPUT_STATE *kb);
+
+static int keyboard_poll(XBOX_INPUT_STATE *out)
+{
+    if (!xbox_InputKeyboardPoll(out))
+        return 0;
+    game_keys_merge(out);
+    return 1;
+}
+
 /* Merge the keyboard on top of a pad on port 0 rather than only standing in
  * for a missing one (as upstream): a real pad keeps working, the keys only
  * add. Under Wine XInputGetState succeeds with nothing plugged in, so a
@@ -230,7 +241,7 @@ static void keyboard_merge(XBOX_INPUT_STATE *pState)
     XBOX_INPUT_STATE kb;
     int i;
 
-    if (!xbox_InputKeyboardPoll(&kb))
+    if (!keyboard_poll(&kb))
         return;
     pState->Gamepad.wButtons |= kb.Gamepad.wButtons;
     for (i = 0; i < 8; i++)
@@ -308,7 +319,7 @@ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
              * playable with no controller plugged in. */
             int kb;
             memset(pState, 0, sizeof *pState);
-            kb = xbox_InputKeyboardPoll(pState);
+            kb = keyboard_poll(pState);
             if (mkb_merge(dwPort, pState))
                 g_controller_connected[dwPort] = TRUE;
             if (kb || mkb_enabled()) {
@@ -579,7 +590,7 @@ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
     SDL_UnlockJoysticks();
 
     if (!have) {
-        if (dwPort == 0 && xbox_InputKeyboardPoll(pState)) {
+        if (dwPort == 0 && keyboard_poll(pState)) {
             trace_state(dwPort, pState);
             return ERROR_SUCCESS;
         }
@@ -593,20 +604,62 @@ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
     return ERROR_SUCCESS;
 }
 
+/* AMPED2_PAD_TRACE=1 also logs each rumble change. */
+static void trace_rumble(DWORD port, const XBOX_VIBRATION *v, int sent)
+{
+    static int on = -1;
+    if (on < 0)
+        on = getenv("AMPED2_PAD_TRACE") && *getenv("AMPED2_PAD_TRACE") == '1';
+    if (!on)
+        return;
+    fprintf(stderr, "  PAD: port %lu rumble low=%u high=%u%s\n",
+            (unsigned long)port + 1, v->wLeftMotorSpeed, v->wRightMotorSpeed,
+            sent ? "" : " (no pad / no rumble motor)");
+    fflush(stderr);
+}
+
 DWORD xbox_InputSetState(DWORD dwPort, const XBOX_VIBRATION *pVibration)
 {
+    /* What each port's motors were last set to, and when. */
+    static XBOX_VIBRATION last[XBOX_MAX_CONTROLLERS];
+    static Uint32 last_sent[XBOX_MAX_CONTROLLERS];
+    static SDL_GameController *last_gc[XBOX_MAX_CONTROLLERS];
     DWORD rc = ERROR_DEVICE_NOT_CONNECTED;
+    SDL_GameController *gc;
+    Uint32 now;
 
     if (dwPort >= XBOX_MAX_CONTROLLERS || !pVibration)
         return rc;
     SDL_LockJoysticks();
-    if (g_slot[dwPort].gc) {
-        /* SDL rumble needs a duration; the game re-sends its motor speeds,
-         * so a second per call is enough. */
-        SDL_GameControllerRumble(g_slot[dwPort].gc, pVibration->wLeftMotorSpeed,
-                                 pVibration->wRightMotorSpeed, 1000);
+    gc = g_slot[dwPort].gc;
+    now = SDL_GetTicks();
+    if (gc) {
         rc = ERROR_SUCCESS;
+        /* An Xbox motor runs until the title changes its speed; SDL rumble
+         * needs a duration. So: the longest SDL takes (~65 s), renewed
+         * well before it runs out, and nothing sent while the speeds stay
+         * the same -- the title re-sends them every frame, and each send is
+         * a USB/Bluetooth write on the real pad. A new pad on the port gets
+         * the current speeds too. */
+        if (gc != last_gc[dwPort]
+                || pVibration->wLeftMotorSpeed != last[dwPort].wLeftMotorSpeed
+                || pVibration->wRightMotorSpeed != last[dwPort].wRightMotorSpeed
+                || ((last[dwPort].wLeftMotorSpeed || last[dwPort].wRightMotorSpeed)
+                    && now - last_sent[dwPort] > 30000)) {
+            int ok = SDL_GameControllerRumble(gc, pVibration->wLeftMotorSpeed,
+                                              pVibration->wRightMotorSpeed,
+                                              0xFFFF) == 0;
+            if (pVibration->wLeftMotorSpeed != last[dwPort].wLeftMotorSpeed
+                    || pVibration->wRightMotorSpeed != last[dwPort].wRightMotorSpeed)
+                trace_rumble(dwPort, pVibration, ok);
+            last_gc[dwPort] = gc;
+            last_sent[dwPort] = now;
+        }
+    } else if (pVibration->wLeftMotorSpeed != last[dwPort].wLeftMotorSpeed
+               || pVibration->wRightMotorSpeed != last[dwPort].wRightMotorSpeed) {
+        trace_rumble(dwPort, pVibration, 0);
     }
+    last[dwPort] = *pVibration;
     SDL_UnlockJoysticks();
     return rc;
 }

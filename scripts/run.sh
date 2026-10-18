@@ -13,7 +13,7 @@
 #                           contiguous block at boot and frees it again; without this it keeps ~47 MB for good and
 #                           XACT/USB allocations fail -> the game launches its error screen Boom.xbe
 #   RECOMP_FB_DUMP=<prefix> BMP frame dumps
-#   RECOMP_USB=1 / RECOMP_KEYBOARD=1   emulated USB pad; keyboard = pad 1 (Enter=Start, Z=A, X=B, arrows=D-pad …)
+#   RECOMP_USB=1 / RECOMP_KEYBOARD=1   emulated USB pad; keyboard = pad 1 (Space/Z=A, Enter/Esc=Start, WASD … – README "Controls")
 #   RECOMP_USB_PADS=n       more emulated pads on the USB bus, default 1
 #   AMPED2_SKIP_LOGOS=1     skip the MGS / XSN logo movies (default here); AMPED2_SKIP_INTRO=1 skips the intro too
 #   AMPED2_PAD_TRACE=1      log every controller button change

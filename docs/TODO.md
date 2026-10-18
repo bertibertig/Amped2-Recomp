@@ -33,6 +33,16 @@
 ## Next
 - [ ] Vulkan back end from SSX3-Recomp (front end is rasteriser-bound at ~6 fps)
 
+## Input
+- [x] Keyboard as pad 1 (runtime map) + Amped 2 keys (`src/input/amped2_keys.c`: Space = A, U = Y, O = B,
+      Escape = Start, Tab = Back); checked in the menus and on the pad state
+- [x] Game controllers (`src/input/host_pad.c` = SSX3-Recomp's pad code: XInput/SDL, hotplug) + rumble (runtime patch)
+- [ ] Riding with keyboard and pad (needs the Millicent 1 crash fixed): steering, Space-hold jump, grabs, U/O tricks,
+      Tab reset; rumble on a real pad (Game Options → Vibration is on by default)
+- [ ] Rebinding from a config file (`s_bind` in host_pad.c, the key tables), deadzones; the game's own Button Layout
+      option exists (B to slide on rails or the other layout)
+- [ ] Steam Deck: built-in controls through Steam Input
+
 ## Later
 - [ ] Windows build (MinGW + Proton, then native), Steam Deck test, macOS
 - [ ] 60 fps everywhere, then higher frame rates, resolution, AA, widescreen, HD textures

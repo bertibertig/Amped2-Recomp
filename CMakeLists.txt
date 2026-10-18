@@ -38,11 +38,13 @@ add_subdirectory(${XBOXRECOMP_DIR} ${CMAKE_BINARY_DIR}/xboxrecomp)
 # Host game controllers: our src/input/host_pad.c replaces the runtime's
 # xinput_device.c in its xbox_input library (same API, xinput_xbox.h), so the
 # submodule stays unmodified. Adds hotplug, the binding table and the
-# Black/White fix -- see the file's header.
+# Black/White fix -- see the file's header. amped2_keys.c adds the game's own
+# keys (Space = A, Escape = Start ...) to the runtime's keyboard map.
 get_target_property(AMPED2_INPUT_SOURCES xbox_input SOURCES)
 list(REMOVE_ITEM AMPED2_INPUT_SOURCES xinput_device.c)
 set_property(TARGET xbox_input PROPERTY SOURCES
-    ${AMPED2_INPUT_SOURCES} ${CMAKE_CURRENT_SOURCE_DIR}/src/input/host_pad.c)
+    ${AMPED2_INPUT_SOURCES} ${CMAKE_CURRENT_SOURCE_DIR}/src/input/host_pad.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/input/amped2_keys.c)
 
 # ── Recompiled game executable ──────────────────────────────────
 

@@ -7,6 +7,6 @@ OUT="$ROOT/build/tests"
 mkdir -p "$OUT"
 RT="$ROOT/xboxrecomp/src"
 cc -std=c11 -Wall -Wextra -O1 -o "$OUT/pad_virtual" \
-  "$ROOT/tests/pad_virtual.c" "$ROOT/src/input/host_pad.c" "$RT/input/keyboard.c" \
+  "$ROOT/tests/pad_virtual.c" "$ROOT/src/input/host_pad.c" "$ROOT/src/input/amped2_keys.c" "$RT/input/keyboard.c" \
   -I"$RT/input" -I"$RT" $(sdl2-config --cflags --libs)
 SDL_VIDEODRIVER=dummy "$OUT/pad_virtual"

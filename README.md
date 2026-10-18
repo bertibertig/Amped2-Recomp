@@ -43,8 +43,56 @@ scripts/doctor.sh                                  # bring-up report
 
 `scripts/run.sh` starts the game (CPU renderer, logos skipped). Useful switches: `AMPED2_SKIP_INTRO=1` (skip the
 intro movie too), `AMPED2_SKIP_LOGOS=0` (show the MGS/XSN logos). While it runs, `scripts/press.sh start`
-(or `a`, `down`, `a:400`, `lt+rt` …) sends controller input; the keyboard works as pad 1 as well
-(Enter = Start, Z = A, X = B, arrows = D-pad).
+(or `a`, `down`, `a:400`, `lt+rt` …) sends controller input; the keyboard and game controllers work as well
+(see Controls).
+
+## Controls
+
+What the buttons do in Amped 2 (the picture on the level loading screen): left stick = turn / spin / flip / butter,
+A = accelerate (release to jump), B = jib / rail slide, Y = lip trick, right stick = grabs, Back = reset boarder,
+Start = pause. In the menus A or Start selects, B goes back. Game Options has vibration and a second button layout.
+
+**Keyboard** (pad 1, on by default with `RECOMP_KEYBOARD=1`; keys only count while the game window has the focus):
+
+| Key | Xbox | In the game |
+|---|---|---|
+| W A S D (or keypad 8 4 2 6) | Left stick | Turn, spin, flip, butter |
+| Space (or Z) | A | Accelerate / jump, select |
+| O (or X) | B | Jib / rail slide, back |
+| U (or V) | Y | Lip trick |
+| C | X | |
+| I J K L | Right stick | Grabs |
+| Arrows | D-pad | Menus |
+| Enter or Escape | Start | Pause, select |
+| Backspace or Tab | Back | Reset boarder |
+| 1 / 3 | Left / right trigger | |
+| Q / E | White / Black | |
+| Shift / Ctrl | Left / right stick click | |
+
+Space, U, O, Escape and Tab are Amped 2's own additions (`src/input/amped2_keys.c`, by key position, so the same
+place on QWERTZ/AZERTY); the rest is the runtime's map for every title (`xboxrecomp/src/input/keyboard.c`, by key
+label: on QWERTZ the Z key sits where QWERTY has Y).
+
+**Controllers**: any XInput-style pad (Xbox 360 / One / Series, 8BitDo in X-input mode, Steam Deck through Steam
+Input – not yet tested on a Deck) and anything else SDL2 knows as a game controller (Windows: XInput). Pads can be
+plugged in or switched on at any time; each takes the lowest free Xbox port (`PAD: port 1 <- "…"` in the log). The
+keyboard keeps working on port 1 alongside a pad.
+
+| Your pad | Xbox (Controller S) |
+|---|---|
+| A / B / X / Y | A / B / X / Y |
+| LB / RB | White / Black |
+| LT / RT | Left / right trigger (analog) |
+| Start (Menu) / Back (View) | Start / Back |
+| Sticks, stick clicks, D-pad | Same |
+
+- Rumble: the game's vibration goes to the pad's motors (SDL rumble / XInput vibration).
+- `AMPED2_PAD_TRACE=1` prints every button and rumble change per port – handy to check a new controller.
+- `config/gamecontrollerdb.txt` (or `AMPED2_PAD_DB=<file>`) adds SDL mappings for unknown pads
+  ([SDL_GameControllerDB](https://github.com/mdqinc/SDL_GameControllerDB) format).
+- `scripts/test_pad.sh` checks hotplug, the map and rumble with a virtual pad, no hardware needed.
+
+Code: `src/input/host_pad.c` (same as SSX3-Recomp's `ssx3_pad.c`; replaces the runtime's `xinput_device.c`).
 
 Optional: `scripts/fetch_references.sh` (reference ports into `reference/`), `scripts/ghidra.sh`
 (Ghidra names for the generated code, needs Ghidra under `/opt/ghidra` or `GHIDRA_HOME`).

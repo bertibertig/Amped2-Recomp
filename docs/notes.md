@@ -263,3 +263,28 @@ _(date – what was done, what was found, next step)_
   - Reached: legal/ESRB screen and the title "PRESS START TO BEGIN", correct in the CPU rasteriser at ~6 fps.
     Profile: ~80 % rasteriser (sample_tex, xf_rows, nv2a_rc_eval, read_rgb, blending), the rest D3D spins waiting
     for it → the Vulkan back end is next. XPP callback `0x0032FC8B` seeded (9 seeds; needs a disasm run).
+- 2026-10-18 – **Controls: keyboard and game controllers.**
+  - State before: the runtime keyboard pad (`RECOMP_KEYBOARD=1`) and `src/input/host_pad.c` (SSX3's pad code) were in
+    place. Checked under Xvfb with `xdotool` key events into the Vulkan window (`SDL_VIDEODRIVER=x11`,
+    `AMPED2_PAD_TRACE=1`): keys reach the window (`vk_backend.c` pumps `xbox_InputSdlEvent`), the pad state and the game.
+  - Reference (xemu, loading screen of Millicent 1): left stick = turn / spin / flip / butter, A = accelerate (release
+    to jump), B = jib / rail slide, Y = lip trick, right stick = grabs, Back = reset boarder, Start = pause. Game Options:
+    Vibration (on), Camera distance, Button layout ("B to slide on rails" or the other), Hints.
+  - The runtime map has A on Z – the left hand would steer (WASD) and accelerate at once. **`src/input/amped2_keys.c`**
+    adds keys on top (the runtime map stays): Space = A, U = Y, O = B, Escape = Start, Tab = Back. Read as SDL scancodes
+    from `SDL_GetKeyboardState` (the runtime turns only letters/digits/a few named keys into its key state; SDL keeps
+    the state per focused window and clears it on focus loss); on Windows from the runtime's VK state. Hooked in
+    `host_pad.c` through `keyboard_poll()` → `game_keys_merge()` (all three keyboard paths).
+  - Rumble taken over from SSX3-Recomp (its commit 7b677b7): runtime `usb_gamepad_output()` (ep2 OUT and HID
+    SET_REPORT data stage) → `xbox_InputSetState()`; `host_pad.c` holds SDL rumble until the game changes it.
+    `scripts/test_pad.sh` (virtual pad: hotplug, map, rumble) passes; MinGW syntax check of both input files clean.
+  - Verified in the game (keyboard): Escape skips the intro → legal → Enter → main menu; Space selects Career; O goes
+    back; arrows and S (left stick) move the menu cursor; Space/U/O/Escape/Tab/Z/X/C/V/1/3/Q/E/Enter/Backspace all
+    show up as the right buttons in the trace. Level select → Millicent 1 → Evergreen loads and shows the challenge
+    list and the Media Challenge card.
+  - **Blocked: riding.** Entering the session crashes: `[ICALL] Failed to resolve VA 0x000A5A70` (×4), `0x0024F240`,
+    then SIGSEGV in `sub_00241910` (called from `sub_00098870`). Needs seeds + a pipeline run; riding controls and
+    rumble in a race are still unverified, as is a real pad in the menus (no one pressing its buttons).
+  - Lesson: `pkill -f amped2_recomp` / `pgrep -f <pattern>` inside a Bash tool call match the tool's own shell (its
+    command line contains the pattern) and kill it – use PIDs. Two sessions sharing `logs/pad_live.txt` drive each
+    other's game: give a second instance its own `RECOMP_PAD_LIVE`.
