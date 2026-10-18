@@ -80,6 +80,7 @@ typedef struct {
  * one 640x480 texture updated every frame). */
 typedef struct {
     uint32_t       offset, width, height, color, pitch;
+    uint32_t       cube_stride;            /* 0: 2D; else six layers, a cube view */
     uint64_t       hash;
     uint32_t       checked;                /* flip number of the last check */
     uint32_t       last_used;
@@ -112,11 +113,16 @@ typedef struct {
     uint32_t fin[4];         /* final0, final1, control, stage_program */
     float    fc0[4], fc1[4], fog_color[4];
     float    tex_scale[4][4];
-    uint32_t misc[4];        /* clip_plane_mode */
+    uint32_t misc[4];        /* clip_plane_mode, dot_mapping, stage_input,
+                              * bit per stage sampling a cube map */
+    float    eye[4];         /* SET_EYE_VECTOR */
 } VkbCombiners;
 
-/* Bindings of the push-descriptor set: four stage samplers, then the UBO. */
-#define VKB_BIND_RC 4
+/* Bindings of the push-descriptor set: four stage samplers, the UBO, then the
+ * same four stages as cube samplers. */
+#define VKB_BIND_RC   4
+#define VKB_BIND_CUBE 5
+#define VKB_NBIND     9
 
 static struct {
     int               failed;              /* init failed: stay inert */
@@ -163,6 +169,7 @@ static struct {
     VkbDepth          depths[VKB_MAX_SURFACES];
     VkbTexture        textures[VKB_MAX_TEXTURES];
     VkbTexture        white;               /* bound when a batch is untextured */
+    VkbTexture        white_cube;          /* ... and in every unused cube slot */
     uint32_t         *decode_buf;          /* decode scratch, grown on demand */
     size_t            decode_cap;
 
@@ -234,7 +241,7 @@ static void transition(VkImage image, VkImageAspectFlags aspect,
     b.image = image;
     b.subresourceRange.aspectMask = aspect;
     b.subresourceRange.levelCount = 1;
-    b.subresourceRange.layerCount = 1;
+    b.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;   /* cube maps: 6 */
     vkCmdPipelineBarrier(V.cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                          VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
                          0, NULL, 0, NULL, 1, &b);
@@ -566,10 +573,11 @@ static void *ring_alloc(VkbRing *r, VkDeviceSize bytes, VkDeviceSize align,
     return r->mapped + at;
 }
 
-/* A device-local 2D image with one view. */
-static int image_create(uint32_t w, uint32_t h, VkFormat fmt, VkImageUsageFlags usage,
-                        VkImageAspectFlags aspect, VkImage *img,
-                        VkDeviceMemory *mem, VkImageView *view)
+/* A device-local 2D image with one view; with cube set, six layers and a
+ * cube view (w == h). */
+static int image_create_ex(uint32_t w, uint32_t h, VkFormat fmt, VkImageUsageFlags usage,
+                           VkImageAspectFlags aspect, int cube, VkImage *img,
+                           VkDeviceMemory *mem, VkImageView *view)
 {
     VkImageCreateInfo ci;
     VkMemoryRequirements req;
@@ -584,7 +592,8 @@ static int image_create(uint32_t w, uint32_t h, VkFormat fmt, VkImageUsageFlags 
     ci.extent.height = h;
     ci.extent.depth = 1;
     ci.mipLevels = 1;
-    ci.arrayLayers = 1;
+    ci.arrayLayers = cube ? 6 : 1;
+    ci.flags = cube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
     ci.samples = VK_SAMPLE_COUNT_1_BIT;
     ci.tiling = VK_IMAGE_TILING_OPTIMAL;
     ci.usage = usage;
@@ -603,13 +612,20 @@ static int image_create(uint32_t w, uint32_t h, VkFormat fmt, VkImageUsageFlags 
     memset(&vci, 0, sizeof vci);
     vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     vci.image = *img;
-    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vci.viewType = cube ? VK_IMAGE_VIEW_TYPE_CUBE : VK_IMAGE_VIEW_TYPE_2D;
     vci.format = fmt;
     vci.subresourceRange.aspectMask = aspect;
     vci.subresourceRange.levelCount = 1;
-    vci.subresourceRange.layerCount = 1;
+    vci.subresourceRange.layerCount = cube ? 6 : 1;
     VK_CHECK(vkCreateImageView(V.device, &vci, NULL, view));
     return 1;
+}
+
+static int image_create(uint32_t w, uint32_t h, VkFormat fmt, VkImageUsageFlags usage,
+                        VkImageAspectFlags aspect, VkImage *img,
+                        VkDeviceMemory *mem, VkImageView *view)
+{
+    return image_create_ex(w, h, fmt, usage, aspect, 0, img, mem, view);
 }
 
 static VkShaderModule shader_module(const uint32_t *code, size_t bytes)
@@ -630,7 +646,7 @@ static VkShaderModule shader_module(const uint32_t *code, size_t bytes)
  * the attachment formats and filled polygons. */
 static int create_pipeline(void)
 {
-    VkDescriptorSetLayoutBinding bind[VKB_BIND_RC + 1];
+    VkDescriptorSetLayoutBinding bind[VKB_NBIND];
     VkDescriptorSetLayoutCreateInfo dslci;
     VkPushConstantRange pcr;
     VkPipelineLayoutCreateInfo plci;
@@ -666,7 +682,7 @@ static int create_pipeline(void)
     int i;
 
     memset(bind, 0, sizeof bind);
-    for (i = 0; i <= VKB_BIND_RC; i++) {
+    for (i = 0; i < VKB_NBIND; i++) {
         bind[i].binding = (uint32_t)i;
         bind[i].descriptorType = i == VKB_BIND_RC ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
                                                   : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -676,7 +692,7 @@ static int create_pipeline(void)
     memset(&dslci, 0, sizeof dslci);
     dslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     dslci.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-    dslci.bindingCount = VKB_BIND_RC + 1;
+    dslci.bindingCount = VKB_NBIND;
     dslci.pBindings = bind;
     VK_CHECK(vkCreateDescriptorSetLayout(V.device, &dslci, NULL, &V.set_layout));
 
@@ -1100,7 +1116,7 @@ extern ptrdiff_t xbox_GetMemoryOffset(void);   /* xbox_memory_layout.h */
  * again each frame for nothing (race at 8-10 fps). Clamped to the guest
  * region the texture lies in. 64-bit multiply-xorshift per 8 bytes: several
  * GB/s, so a frame's worth of textures costs well under a millisecond. */
-static uint64_t texture_bytes(const Nv2aTexture *g)
+static uint64_t texture_bytes_face(const Nv2aTexture *g)
 {
     uint64_t w = g->width, h = g->height;
 
@@ -1119,6 +1135,19 @@ static uint64_t texture_bytes(const Nv2aTexture *g)
     default:                                    /* 32 bpp, or unknown: bound */
         return w * h * 4;
     }
+}
+
+/* A cube map: faces 0-4 with their mip levels, then face 5's level 0. */
+static uint64_t texture_bytes(const Nv2aTexture *g)
+{
+    return (g->cube_stride ? 5ull * g->cube_stride : 0) + texture_bytes_face(g);
+}
+
+/* Whether the batch samples g as a cube map: a Vulkan cube needs square
+ * faces, anything else reads face 0 as 2D. */
+static int tex_is_cube(const Nv2aTexture *g)
+{
+    return g && g->cube_stride && g->width == g->height;
 }
 
 static uint64_t hash_guest_texture(const Nv2aTexture *g)
@@ -1163,7 +1192,8 @@ static void texture_free(VkbTexture *t)
  * recorded before this one still see the old contents). */
 static int texture_upload(VkbTexture *t, const uint32_t *argb)
 {
-    VkDeviceSize off, bytes = (VkDeviceSize)t->width * t->height * 4;
+    uint32_t layers = t->cube_stride ? 6 : 1;
+    VkDeviceSize off, bytes = (VkDeviceSize)t->width * t->height * 4 * layers;
     void *dst = ring_alloc(&V.staging, bytes, 16, &off);
     VkBufferImageCopy region;
 
@@ -1181,7 +1211,7 @@ static int texture_upload(VkbTexture *t, const uint32_t *argb)
     memset(&region, 0, sizeof region);
     region.bufferOffset = off;
     region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    region.imageSubresource.layerCount = 1;
+    region.imageSubresource.layerCount = layers;   /* faces follow each other */
     region.imageExtent.width = t->width;
     region.imageExtent.height = t->height;
     region.imageExtent.depth = 1;
@@ -1211,6 +1241,26 @@ static int white_ready(void)
     return 1;
 }
 
+static int white_cube_ready(void)
+{
+    static const uint32_t px[6] = { ~0u, ~0u, ~0u, ~0u, ~0u, ~0u };
+    if (V.white_cube.hash)
+        return 1;
+    if (!V.white_cube.image) {
+        V.white_cube.width = V.white_cube.height = 1;
+        V.white_cube.cube_stride = 4;
+        if (!image_create_ex(1, 1, VK_FORMAT_B8G8R8A8_UNORM,
+                             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                             VK_IMAGE_ASPECT_COLOR_BIT, 1, &V.white_cube.image,
+                             &V.white_cube.memory, &V.white_cube.view))
+            return 0;
+    }
+    if (!texture_upload(&V.white_cube, px))
+        return 0;
+    V.white_cube.hash = 1;
+    return 1;
+}
+
 /* The image view a batch samples for its texture: a surface the GPU rendered
  * (render-to-texture: guest memory never saw those pixels), or a cached
  * decode of guest memory, re-validated once per frame. NULL: draw untextured. */
@@ -1219,9 +1269,12 @@ static VkImageView texture_view(const Nv2aTexture *g)
     VkbTexture *t = NULL, *victim = NULL;
     size_t n;
     uint64_t h;
+    uint32_t cube = tex_is_cube(g) ? g->cube_stride : 0, f;
     int i;
 
-    for (i = 0; i < VKB_MAX_SURFACES; i++) {
+    /* ponytail: a cube map the GPU rendered (dynamic reflections) is not
+     * looked up among the surfaces; it reads what guest memory holds. */
+    for (i = 0; i < VKB_MAX_SURFACES && !cube; i++) {
         VkbSurface *s = &V.surfaces[i];
         if (s->image && s->va == g->offset && s->layout != VK_IMAGE_LAYOUT_UNDEFINED) {
             if (s == V.rt_color && V.rendering)
@@ -1237,7 +1290,8 @@ static VkImageView texture_view(const Nv2aTexture *g)
     for (i = 0; i < VKB_MAX_TEXTURES; i++) {
         VkbTexture *c = &V.textures[i];
         if (c->image && c->offset == g->offset && c->width == g->width
-                && c->height == g->height && c->color == g->color && c->pitch == g->pitch) {
+                && c->height == g->height && c->color == g->color && c->pitch == g->pitch
+                && c->cube_stride == cube) {
             t = c;
             break;
         }
@@ -1253,7 +1307,7 @@ static VkImageView texture_view(const Nv2aTexture *g)
         return t->view;
     }
 
-    n = (size_t)g->width * g->height;
+    n = (size_t)g->width * g->height * (cube ? 6 : 1);
     if (n > V.decode_cap) {
         free(V.decode_buf);
         V.decode_buf = (uint32_t *)malloc(n * 4);
@@ -1261,8 +1315,13 @@ static VkImageView texture_view(const Nv2aTexture *g)
         if (!V.decode_buf)
             return NULL;
     }
-    if (!nv2a_backend_decode_texture(g, V.decode_buf))
-        return NULL;                       /* format the executor cannot decode */
+    for (f = 0; f < (cube ? 6u : 1u); f++) {
+        Nv2aTexture face = *g;
+        size_t npx = (size_t)g->width * g->height;
+        face.offset = g->offset + f * cube;
+        if (!nv2a_backend_decode_texture(&face, V.decode_buf + f * npx))
+            return NULL;                   /* format the executor cannot decode */
+    }
     V.stat_decodes++;
     V.stat_decode_px += n;
     V.stat_new += !t;
@@ -1290,14 +1349,15 @@ static VkImageView texture_view(const Nv2aTexture *g)
             texture_free(victim);
         }
         t = victim;
-        if (!image_create(g->width, g->height, VK_FORMAT_B8G8R8A8_UNORM,
-                          VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                          VK_IMAGE_ASPECT_COLOR_BIT, &t->image, &t->memory, &t->view)) {
+        if (!image_create_ex(g->width, g->height, VK_FORMAT_B8G8R8A8_UNORM,
+                             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                             VK_IMAGE_ASPECT_COLOR_BIT, cube != 0, &t->image, &t->memory,
+                             &t->view)) {
             texture_free(t);
             return NULL;
         }
         t->offset = g->offset; t->width = g->width; t->height = g->height;
-        t->color = g->color;   t->pitch = g->pitch;
+        t->color = g->color;   t->pitch = g->pitch; t->cube_stride = cube;
     }
     if (!texture_upload(t, V.decode_buf))
         return t->hash ? t->view : NULL;
@@ -1626,6 +1686,14 @@ static int combiners_upload(const Nv2aBatchExt *e, VkDeviceSize *off)
         u.tex_scale[i][1] = (t && t->pitch && t->height) ? 1.0f / (float)t->height : 1.0f;
     }
     u.misc[0] = e->clip_plane_mode;
+    u.misc[1] = rc->dot_mapping;
+    u.misc[2] = rc->stage_input;
+    for (i = 0; i < 4; i++)
+        if (tex_is_cube(e->textures[i]))
+            u.misc[3] |= 1u << i;
+    u.eye[0] = e->eye_vector[0];
+    u.eye[1] = e->eye_vector[1];
+    u.eye[2] = e->eye_vector[2];
 
     if (V.last_rc_off != ~(VkDeviceSize)0 && !memcmp(&u, &V.last_rc, sizeof u)) {
         *off = V.last_rc_off;
@@ -1649,9 +1717,9 @@ static void vkb_draw(const Nv2aSurface *g, const Nv2aBatch *b)
     VkbDepth *d;
     const Nv2aTexture *stex[4] = { NULL, NULL, NULL, NULL };
     VkImageView views[4] = { VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE };
-    VkDescriptorImageInfo dii[4];
+    VkDescriptorImageInfo dii[8];
     VkDescriptorBufferInfo dbi;
-    VkWriteDescriptorSet w[VKB_BIND_RC + 1];
+    VkWriteDescriptorSet w[VKB_NBIND];
     VkbPush pc;
     VkDeviceSize voff[2], vstride[2], rc_off = 0;
     VkDeviceSize bytes = (VkDeviceSize)b->count * sizeof(Nv2aVertex);
@@ -1665,7 +1733,8 @@ static void vkb_draw(const Nv2aSurface *g, const Nv2aBatch *b)
     e = no_rc ? NULL : b->ext;
     use_rc = e && e->rc;
     ebytes = e ? (VkDeviceSize)b->count * sizeof(Nv2aVertexExt) : sizeof(Nv2aVertexExt);
-    if (!b->count || !ensure_ready() || !ensure_recording() || !white_ready())
+    if (!b->count || !ensure_ready() || !ensure_recording() || !white_ready()
+            || !white_cube_ready())
         return;
     if (!(s = surface_get(g)))
         return;
@@ -1707,15 +1776,24 @@ static void vkb_draw(const Nv2aSurface *g, const Nv2aBatch *b)
 
     memset(w, 0, sizeof w);
     for (i = 0; i < 4; i++) {
-        /* A stage with nothing usable reads white, as on the CPU path. */
-        dii[i].sampler = sampler_get(views[i] ? stex[i] : NULL);
-        dii[i].imageView = views[i] ? views[i] : V.white.view;
-        dii[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        w[i].dstBinding = (uint32_t)i;
-        w[i].descriptorCount = 1;
-        w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        w[i].pImageInfo = &dii[i];
+        /* A stage with nothing usable reads white, as on the CPU path. A cube
+         * map goes to the stage's cube binding, white to its 2D one. */
+        int cube = views[i] && use_rc && tex_is_cube(stex[i]);
+        VkSampler smp = sampler_get(views[i] ? stex[i] : NULL);
+        int k;
+        dii[i].sampler = smp;
+        dii[i].imageView = views[i] && !cube ? views[i] : V.white.view;
+        dii[4 + i].sampler = smp;
+        dii[4 + i].imageView = cube ? views[i] : V.white_cube.view;
+        for (k = 0; k < 2; k++) {
+            int d = k ? VKB_BIND_CUBE + i : i, at = k ? 5 + i : i;
+            dii[i + 4 * k].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            w[at].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w[at].dstBinding = (uint32_t)d;
+            w[at].descriptorCount = 1;
+            w[at].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w[at].pImageInfo = &dii[i + 4 * k];
+        }
     }
     /* The UBO binding must be valid even when the shader skips it: without
      * combiners rc_off stays 0, an in-range block it never reads. */
@@ -1728,7 +1806,7 @@ static void vkb_draw(const Nv2aSurface *g, const Nv2aBatch *b)
     w[VKB_BIND_RC].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     w[VKB_BIND_RC].pBufferInfo = &dbi;
     vkCmdPushDescriptorSetKHR(V.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, V.pipe_layout,
-                              0, VKB_BIND_RC + 1, w);
+                              0, VKB_NBIND, w);
 
     pc.surface_size[0] = (float)s->width;
     pc.surface_size[1] = (float)s->height;

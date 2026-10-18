@@ -29,7 +29,7 @@
 - [x] Legal/ESRB screen, title screen
 - [x] Main menu, career menu, level select (Vulkan, 60 fps)
 - [x] Dot-product texture shader modes (CPU path): rider pants/shoes/head lit and textured
-- [ ] Dot-product modes + real cube maps in the Vulkan shader/back end (rider still black there)
+- [x] Dot-product modes + real cube maps in the Vulkan shader/back end (rider matches the CPU path)
 - [ ] Rider upper body (jacket, arms) and head base pass never submitted by the game – find out why (compare a fresh profile in xemu)
 - [ ] Per-title save root: `~/.local/share/xboxrecomp/Cache` (z:) is shared with SSX3-Recomp (RECOMP_SAVE_DIR per port?)
 - [ ] First run on the mountain (Millicent 1): entering the Evergreen session crashes – ICALLs 0x000A5A70 and

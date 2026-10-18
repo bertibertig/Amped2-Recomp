@@ -331,3 +331,10 @@ _(date – what was done, what was found, next step)_
     (`0xFDFDFDFD`) even with the real semaphore (0x82252080, a model block loaded via zlib and freed later).
   - Note: the runtime's save root `~/.local/share/xboxrecomp` (TDATA/UDATA/Cache = `z:`) is shared with SSX3-Recomp;
     titles are separated by title ID in TDATA/UDATA, but `Cache` (`z:`) is common to both ports.
+- 2026-10-18 – **Vulkan: dot-product texture modes and cube maps.**
+  - `nv2a.frag` ports the CPU path's dot modes (`stage_fetch` now sees the earlier stages; `stage_dot`, `dotmap`,
+    reflection with the per-stage `q` or SET_EYE_VECTOR). Cube-map stages sample real cube views (bindings 5-8).
+  - Runtime patch: `Nv2aTexture.cube_stride` (bytes between faces, `tex_face_stride`; 0 for 2D) and
+    `Nv2aBatchExt.eye_vector`. The back end decodes the six faces one by one through `nv2a_backend_decode_texture`.
+  - Result (Career menu, Vulkan vs. CPU dumps): the rider's pants and shoes are lit and textured the same in both;
+    49 fps in the menu as before. Not checked: the Vulkan validation layer (not installed here).

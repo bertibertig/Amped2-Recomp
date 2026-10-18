@@ -20,6 +20,12 @@ layout(set = 0, binding = 0) uniform sampler2D tex0;
 layout(set = 0, binding = 1) uniform sampler2D tex1;
 layout(set = 0, binding = 2) uniform sampler2D tex2;
 layout(set = 0, binding = 3) uniform sampler2D tex3;
+// The same stages when their texture is a cube map (rc.misc.w bit per
+// stage); the other binding of each pair holds a 1x1 white dummy.
+layout(set = 0, binding = 5) uniform samplerCube cube0;
+layout(set = 0, binding = 6) uniform samplerCube cube1;
+layout(set = 0, binding = 7) uniform samplerCube cube2;
+layout(set = 0, binding = 8) uniform samplerCube cube3;
 
 // Combiner state for one batch; layout matches VkbCombiners in vk_backend.c.
 layout(std140, set = 0, binding = 4) uniform RC {
@@ -30,7 +36,9 @@ layout(std140, set = 0, binding = 4) uniform RC {
     vec4  fc0, fc1;       // SPECULAR_FOG_FACTOR 0/1
     vec4  fog_color;      // rgb; .a unused
     vec4  tex_scale[4];   // xy: multiplies s/q, t/q into [0,1] (1/size for linear)
-    uvec4 misc;           // x: clip_plane_mode
+    uvec4 misc;           // x: clip_plane_mode, y: dot_mapping,
+                          // z: stage_input, w: bit per cube-map stage
+    vec4  eye;            // SET_EYE_VECTOR (DOT_RFLCT_SPEC_CONST)
 } rc;
 
 layout(push_constant) uniform PC {
@@ -74,19 +82,61 @@ vec4 stage_sample(int st, vec2 uv)
     return texture(tex3, uv);
 }
 
-vec4 stage_fetch(int st, vec4 c)
+// A cube-map lookup by direction; a texture that is not a cube map reads
+// (x, y) as 2D (rc_cube_fetch). Vulkan's face selection and orientation are
+// the GL rules the CPU path implements by hand.
+vec4 stage_cube(int st, vec3 d)
+{
+    if (((rc.misc.w >> st) & 1u) == 0u)
+        return stage_sample(st, d.xy * rc.tex_scale[st].xy);
+    if (d == vec3(0.0))
+        d = vec3(1.0, 0.0, 0.0);
+    if (st == 0) return texture(cube0, d);
+    if (st == 1) return texture(cube1, d);
+    if (st == 2) return texture(cube2, d);
+    return texture(cube3, d);
+}
+
+// PS_DOTMAPPING (rc_dotmap): an input texel component as a vector component.
+float dotmap(uint m, float x)
+{
+    float b = x * 255.0;
+    switch (m & 7u) {
+    case 1u: return (b - 128.0) / 127.0;
+    case 2u: return b >= 128.0 ? (b - 255.5) / 127.5 : (b + 0.5) / 127.5;
+    case 3u: return b >= 128.0 ? (b - 256.0) / 127.0 : b / 127.0;
+    default: return x;
+    }
+}
+
+// What the dot-product modes carry from stage to stage (RcDotState).
+float g_dot[4];
+float g_eye_w[4];
+
+// dot(c.xyz, dotmap(t[input])) for stage st (1..3) (rc_stage_dot).
+float stage_dot(int st, vec4 c, vec4 t[4])
+{
+    uint inp = st == 1 ? 0u
+             : st == 2 ? (rc.misc.z >> 16) & 3u
+                       : (rc.misc.z >> 20) & 3u;
+    uint m = (rc.misc.y >> (4 * (st - 1))) & 15u;
+    vec4 x = t[inp];
+    return c.x * dotmap(m, x.x) + c.y * dotmap(m, x.y) + c.z * dotmap(m, x.z);
+}
+
+// Texture stage st with coordinates c; t[] holds the stages before it.
+vec4 stage_fetch(int st, vec4 c, vec4 t[4])
 {
     uint mode = (rc.fin.w >> (st * 5)) & 31u;
     float q = c.w != 0.0 ? c.w : 1.0;
+    g_eye_w[st] = c.w;
     switch (mode) {
     case 0u:                                  // NONE
         return vec4(0.0, 0.0, 0.0, 1.0);
     case 1u: case 2u:                         // PROJECT2D / 3D
         return stage_sample(st, c.xy / q * rc.tex_scale[st].xy);
     case 3u:                                  // CUBEMAP
-        // ponytail: face 0 only (the back end decodes one face); sampled
-        // like the CPU path does a non-cube texture.
-        return stage_sample(st, c.xy * rc.tex_scale[st].xy);
+        return stage_cube(st, c.xyz);
     case 4u:                                  // PASSTHRU
         return clamp(c, 0.0, 1.0);
     case 5u: {                                // CLIPPLANE
@@ -97,10 +147,35 @@ vec4 stage_fetch(int st, vec4 c)
         }
         return vec4(0.0);
     }
-    default:
-        // Bump-env and dot-product modes read zero, as on the CPU path.
+    // The dot-product modes: stages 1-3 take dot(texcoord.xyz, input texel);
+    // the last stage of the chain looks a texture up with the vector.
+    case 0x09u: case 0x0Du:                   // DOT_ST, DOT_STR_3D (as 2D)
+        if (st < 1) break;
+        g_dot[st] = stage_dot(st, c, t);
+        return stage_sample(st, vec2(g_dot[1], g_dot[2]) * rc.tex_scale[st].xy);
+    case 0x0Au: case 0x11u:                   // DOT_ZW, DOT_PRODUCT
+        if (st < 1) break;
+        g_dot[st] = stage_dot(st, c, t);
         return vec4(0.0);
+    case 0x0Eu:                               // DOT_STR_CUBE
+        if (st < 1) break;
+        g_dot[st] = stage_dot(st, c, t);
+        return stage_cube(st, vec3(g_dot[1], g_dot[2], g_dot[3]));
+    case 0x0Cu: case 0x12u: {                 // DOT_RFLCT_SPEC(_CONST)
+        if (st < 1) break;
+        g_dot[st] = stage_dot(st, c, t);
+        vec3 n = vec3(g_dot[1], g_dot[2], g_dot[3]);
+        vec3 e = mode == 0x0Cu ? vec3(g_eye_w[1], g_eye_w[2], g_eye_w[3])
+                               : rc.eye.xyz;
+        float nn = dot(n, n);
+        if (nn == 0.0) nn = 1.0;
+        return stage_cube(st, 2.0 * n * dot(n, e) / nn - e);
     }
+    default:
+        break;
+    }
+    // Bump-env and DOT_RFLCT_DIFF read zero, as on the CPU path.
+    return vec4(0.0);
 }
 
 // ---- register combiners (nv2a_rc_eval) --------------------------------
@@ -239,11 +314,13 @@ void main()
 {
     vec4 c;
     if ((pc.flags & 2u) != 0u) {
-        vec4 t[4];
-        t[0] = stage_fetch(0, v_tex0);
-        t[1] = stage_fetch(1, v_tex1);
-        t[2] = stage_fetch(2, v_tex2);
-        t[3] = stage_fetch(3, v_tex3);
+        vec4 t[4] = vec4[4](vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0));
+        for (int i = 0; i < 4; i++)
+            g_dot[i] = g_eye_w[i] = 0.0;
+        t[0] = stage_fetch(0, v_tex0, t);
+        t[1] = stage_fetch(1, v_tex1, t);
+        t[2] = stage_fetch(2, v_tex2, t);
+        t[3] = stage_fetch(3, v_tex3, t);
         c = combine(t);
     } else {
         c = v_diffuse;

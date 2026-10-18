@@ -35,12 +35,17 @@ available as the reference (`AMPED2_RENDERER=cpu`) for comparison dumps; the Vul
   texture stages and per vertex four texture-coordinate sets, specular and fog factor. Screen-space batches have
   none (the CPU path does not run them through the combiners either) and draw stage-0 texel × diffuse.
 - `nv2a.frag` is an **uber-shader**: a line-by-line port of the CPU path (`rc_stage_fetch` + `nv2a_rc_eval`, after
-  xemu's psh.c). Combiner state goes into a 528-byte std140 UBO in the frame's ring (reused while unchanged),
-  bound through the push descriptor next to the four stage samplers (bindings 0-3, UBO 4). One precompiled SPIR-V,
+  xemu's psh.c). Combiner state goes into a 544-byte std140 UBO in the frame's ring (reused while unchanged),
+  bound through the push descriptor next to the four stage samplers (bindings 0-3, UBO 4) and the same four stages
+  as cube samplers (bindings 5-8; the unused one of each pair holds a 1x1 white dummy). One precompiled SPIR-V,
   one pipeline; the ext vertex data is a second vertex binding with dynamic stride (0 + one zeroed element without
   ext).
-- Not yet: cube maps (face 0 sampled as 2D), bump-env/dot-product stage modes (read 0, as on the CPU path),
-  palettised textures.
+- Dot-product stage modes (DOT_PRODUCT, DOT_ZW, DOT_ST, DOT_STR_3D as 2D, DOT_STR_CUBE, DOT_RFLCT_SPEC(_CONST))
+  as on the CPU path; dot mappings, other-stage input and the eye vector ride in the UBO. Cube maps
+  (`Nv2aTexture.cube_stride`, square faces) are six-layer images with a cube view, decoded face by face and hashed
+  over all six faces; the hardware's face selection is the GL rule the CPU path implements by hand.
+- Not yet: bump-env and DOT_RFLCT_DIFF (read 0, as on the CPU path), palettised textures, cube maps the GPU
+  rendered (sampled from guest memory, not from a surface).
 - Texture change detection hashes exactly level 0's bytes (DXT block size, bpp per format): an upper bound
   (w*h*4) took in per-frame data behind DXT textures and re-decoded ~20 textures every race frame.
 
