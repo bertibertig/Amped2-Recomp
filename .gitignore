@@ -46,6 +46,7 @@ stderr*.txt
 .DS_Store
 Thumbs.db
 logs/
+shots/
 
 # Runtime log of the xboxrecomp runtime (written to the working directory)
 xbox_kernel.log

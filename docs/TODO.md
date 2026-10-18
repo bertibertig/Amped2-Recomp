@@ -19,12 +19,19 @@
 - [ ] Find out what `Boom.xbe` is and whether default.xbe launches it (XLaunchNewImage)
 - [x] First start, seeds, KEVENTs, fence/vblank, DirectSound/AC'97, heap reclaim
 - [x] NV2A video overlay (movies) in the runtime + SDL window
-- [ ] Movies play at ~1/6 speed: XMV audio clock / APU stream voices (see notes)
-- [ ] Seed the XPP callbacks 0x0032E3A4, 0x0032EDAB, 0x003306DF
+- [x] Movies play at full speed (DPC latency fixed in the runtime)
+- [ ] 5.1 multichannel audio: XMV/DirectSound set up 6 mix bins; the APU output is mixed to stereo for now
+- [x] Seed the XPP callbacks 0x0032E3A4, 0x0032EDAB, 0x003306DF
+- [ ] Re-run the pipeline for seed 0x0032FC8B (XPP callback seen in the intro run)
 - [x] Xbox Live / XNet: XNetGetTitleXnAddr answers "no network" (more XNet calls may need the same)
 - [x] Splash screen (CPU rasteriser, 12 threads)
-- [ ] Logos/intro at full speed, front end, first run on the mountain
+- [x] Logo/intro skip (`AMPED2_SKIP_LOGOS`, `AMPED2_SKIP_INTRO`), live input (`scripts/press.sh`)
+- [x] Legal/ESRB screen, title screen
+- [ ] Main menu → first run on the mountain (needs Start presses; xemu snapshots exist as reference)
 - [ ] Overlay in the Vulkan back end too (nv2a_overlay_compose_xrgb)
+
+## Next
+- [ ] Vulkan back end from SSX3-Recomp (front end is rasteriser-bound at ~6 fps)
 
 ## Later
 - [ ] Windows build (MinGW + Proton, then native), Steam Deck test, macOS

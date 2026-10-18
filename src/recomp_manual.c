@@ -21,6 +21,8 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stddef.h>   /* ptrdiff_t */
+#include <stdlib.h>   /* getenv */
+#include <time.h>     /* timespec_get */
 
 /* The runtime's register model and ICALL declarations. Use these rather than
  * spelling the externs out: g_eax, g_esp ... are thread-local (RECOMP_TLS),
@@ -83,6 +85,107 @@ void sub_00255202(void)
  * what the original returns itself when XNet was never started (ecx == 0 at
  * 0x002BB570). stdcall, one argument: ret 4. Xbox Live is gone anyway; the
  * game should treat the port as an offline console. */
+/* Boot movies.
+ *
+ * FUN_00210E00 (the boot state's update, vtable 0x0036BFC4) plays three
+ * movies in a row while its "play movies" flag (this+0x3D, from the global
+ * 0x00381CB8) is set: MGS (0x00211030, d:\Movies\MGS.xmv), XSN Sports
+ * (0x002110E0, d:\Movies\XSN.xmv -- not on the PAL disc) and the intro
+ * (0x00210F60, Z:\ or d:\Movies\Intro.xmv). Each builds the path and runs the
+ * blocking player FUN_00150EA0; all are cdecl, no arguments, plain `ret`.
+ *
+ *   AMPED2_SKIP_LOGOS=1  no MGS / XSN logo movies (default in scripts/run.sh)
+ *   AMPED2_SKIP_INTRO=1  no intro movie either
+ *
+ * The wrappers keep the generated bodies under the _gen name (the recompiler
+ * emits sub_X_gen when this file defines sub_X and calls sub_X_gen). */
+extern void sub_00211030_gen(void);
+extern void sub_002110E0_gen(void);
+extern void sub_00210F60_gen(void);
+
+static int env_flag(const char *name)
+{
+    const char *v = getenv(name);
+    return v && *v == '1';
+}
+
+static void skip_movie(const char *which)
+{
+    static int said;
+    if (said++ < 3)
+        fprintf(stderr, "[BOOT] skipping the %s movie\n", which);
+    g_eax = 0;
+    g_esp += 4;     /* ret */
+}
+
+void sub_00211030(void)             /* MGS logo */
+{
+    if (env_flag("AMPED2_SKIP_LOGOS")) { skip_movie("MGS logo"); return; }
+    sub_00211030_gen();
+}
+
+void sub_002110E0(void)             /* XSN Sports logo */
+{
+    if (env_flag("AMPED2_SKIP_LOGOS")) { skip_movie("XSN logo"); return; }
+    sub_002110E0_gen();
+}
+
+void sub_00210F60(void)             /* intro */
+{
+    if (env_flag("AMPED2_SKIP_INTRO")) { skip_movie("intro"); return; }
+    sub_00210F60_gen();
+}
+
+/* XMV frame fetch (XMV section 0x002CDE60, stdcall, 4 arguments; reached
+ * from the game's movie loop through the adapter FUN_00150E80, once per loop
+ * iteration). AMPED2_XMV_STATS=1 prints every 5 s how often it was called,
+ * how long the calls took and what they returned -- the question being
+ * whether a movie lags because the loop asks too rarely or because the
+ * decode itself is too slow. */
+extern void sub_002CDE60_gen(void);
+
+static double now_sec(void)
+{
+    struct timespec ts;
+    timespec_get(&ts, TIME_UTC);
+    return (double)ts.tv_sec + ts.tv_nsec * 1e-9;
+}
+
+void sub_002CDE60(void)
+{
+    static int on = -1;
+    static double t_start, t_busy, t_max;
+    static unsigned calls, results[4];
+
+    if (on < 0)
+        on = env_flag("AMPED2_XMV_STATS");
+    if (!on) {
+        sub_002CDE60_gen();
+        return;
+    }
+    {
+        double t0 = now_sec(), dt;
+        if (!t_start)
+            t_start = t0;
+        sub_002CDE60_gen();
+        dt = now_sec() - t0;
+        t_busy += dt;
+        if (dt > t_max)
+            t_max = dt;
+        calls++;
+        results[g_eax == 0 ? 0 : (int32_t)g_eax < 0 ? 1 : g_eax < 16 ? 2 : 3]++;
+        if (t0 + dt - t_start >= 5.0) {
+            fprintf(stderr, "[XMV] %u calls/5s, busy %.0f ms (max %.1f ms/call), "
+                            "eax: 0 x%u, <0 x%u, small x%u, other x%u\n",
+                    calls, t_busy * 1e3, t_max * 1e3,
+                    results[0], results[1], results[2], results[3]);
+            t_start = t0 + dt;
+            t_busy = t_max = 0;
+            calls = results[0] = results[1] = results[2] = results[3] = 0;
+        }
+    }
+}
+
 void sub_002BB66E(void)
 {
     uint32_t pxna = MEM32(g_esp + 4);

@@ -61,7 +61,9 @@ Guides: `xboxrecomp/docs/GETTING_STARTED.md`, `xboxrecomp/docs/pipeline/06-debug
 - None of them is the same engine as Amped 2 (EA vs. Indie Built/Microsoft): game-side addresses do **not** carry over,
   only the toolkit/XDK-level mechanisms. XDK library code (D3D8, DSOUND, XAPI) is similar across titles of the same
   XDK version – compare the XDK version from `parse` with SSX 3's (5558).
-- [xemu](https://xemu.app) as the behaviour reference.
+- [xemu](https://xemu.app) as the behaviour reference: skill `.claude/skills/xemu/SKILL.md` + `scripts/xemu.py` (own
+  Flatpak instance, snapshots, focus-free keys and screenshots). Modelled on the xemu skill of `reference/SSX3-recomp-koen`
+  (idea only, own code/text).
 
 ## Rules
 - **The repo language is English**: docs, code comments, script output, commit messages, `docs/notes.md` entries.

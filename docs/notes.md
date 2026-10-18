@@ -214,3 +214,52 @@ _(date – what was done, what was found, next step)_
     with the next disasm run); `T:\PrevSessionInfo.lua`, `TDATA\FFFE0000\MUSIC\ST.DB` (dashboard soundtracks) and three
     SFX files are not found – expected (not on the disc / no soundtracks).
     The runtime's `nv2a_ack_thread` busy-polls (`sched_yield` + GetTickCount, ~50 % of one core), as in SSX3-Recomp.
+- 2026-10-18 – **xemu reference tooling**: skill `.claude/skills/xemu/SKILL.md` + `scripts/xemu.py`. Modelled on the
+  xemu skill of koenhendriks/SSX3-recomp (`reference/SSX3-recomp-koen/.claude/skills/xemu/SKILL.md`, GPL – idea only,
+  code and text are our own). Separate Flatpak xemu instance (own config/HDD copy in
+  `~/.var/app/app.xemu.xemu/data/amped2-ref/`, QMP 127.0.0.1:4455, muted) as an X11 client so `xdotool --window` keys
+  and `import -window` captures work without focus. Findings:
+  - The Flatpak renders with Mesa llvmpipe: host NVIDIA driver 615.78.08, only the 615.71.09 GL runtime installed
+    (`flatpak install flathub org.freedesktop.Platform.GL.nvidia-615-78-08` fixes it). Under X11, Mesa then needs
+    `__GLX_VENDOR_LIBRARY_NAME=mesa`.
+  - xemu auto-binds real gamepads to free ports (adds a USB hub to the VM state) → `auto_bind = false`, otherwise
+    snapshots only load with that pad plugged in. `-loadvm` on the command line fails for the same reason (the keyboard
+    pad is hot-plugged later) → loadvm over the monitor after start.
+  - No QMP `screendump` in xemu. savevm/loadvm ~0.2 s. Boot order in xemu (PAL): MGS logo → XSN Sports logo → intro
+    movie → (Start) legal/ESRB screen → (Start) title "PRESS START TO BEGIN" → (Start) Main Menu.
+  - Snapshots: intro_movie, title, main_menu, millicent1_menu, millicent1_ride.
+- 2026-10-18 – **Movies at full speed, input, logo/intro skip, performance.**
+  - Root cause of the slow movies (not the renderer: they were just as slow with `RECOMP_PB_EXEC` off): **DPC
+    latency**. The runtime's timer thread drained the DPC queue only after a fixed `Sleep(10)` (more on Linux). XMV
+    feeds DirectSound ~10 ms audio packets; DirectSound appends the next stream segments from the DPC behind the APU
+    interrupt, so the stream voices ran dry (`RECOMP_APU_SSL_STATS=1`: up to 1113 starved fetches per 5 s), XMV's audio
+    clock stalled and the picture with it (the intro ran at ~1/6 speed). Runtime patch: `KeInsertQueueDpc` sets an
+    event the timer thread waits on (10 ms timeout as before). Now 0 starved fetches, the intro reads 27.9 MB in 61 s
+    (real time), 30 new frames/s; the movie loop and vblank run at ~60 Hz instead of ~48 (the accidental 50 Hz vblank
+    of SSX3-Recomp's notes came from the same Sleep).
+  - Ruled out on the way (measured, not guessed): XMV decode is fast (`AMPED2_XMV_STATS=1`: ~48 calls/s, 1-3 ms each);
+    DirectSound's SSL clock ticks were never lost (23.4/s) – a tick backlog was added anyway (`ssl_backlog` in the APU,
+    one tick per acknowledge instead of merging into a still-pending ISTS bit); the frontend loader during the intro is
+    not the bottleneck.
+  - XMV in Amped 2 (`FUN_00150FF0`): asks `XGetAudioFlags` and configures 6 mix bins (5.1) for track 0 plus tracks 1
+    and 2..5 by speaker setup; per iteration GetNextFrame (`0x002CDE60` via adapter `0x00150E80`), block until vblank
+    while `GetOverlayUpdateStatus` says busy, `UpdateOverlay`; `this+0x24 == 1` aborts (button skip). The intro's
+    stream voices are 16-bit stereo 44.1 kHz (voices 69-71, only 69 audible). Output is mixed to stereo for now;
+    real 5.1 output is a TODO.
+  - Overlay cost: the game re-submits the same frame every vblank; composing it every time took 33 % of all CPU.
+    Now the latch compares the frame (`memcmp`) and converts YUV → XRGB once per new frame (table-driven), the window
+    composes only on a new overlay frame or flip, unscaled rows are a `memcpy`. `RECOMP_OVERLAY_DUMP` now dumps every
+    30th *new* frame.
+  - `nv2a_ack_thread` (POSIX): yields as before while DMA_PUT moves or a vblank is pending, sleeps
+    `RECOMP_ACK_IDLE_US` (default 200 µs) after ~4000 quiet rounds. D3D's vblank handler `0x00322390` spins until the
+    ack thread clears PMC_INTR bit 24, hence "not while a vblank is pending".
+  - **Logo/intro skip**: `FUN_00210E00` (boot state) plays MGS (`0x00211030`), XSN (`0x002110E0`, file not on the PAL
+    disc) and the intro (`0x00210F60`) while `this+0x3D` (from global `0x00381CB8`) is set. Wrappers in
+    `src/recomp_manual.c` (the recompiler keeps the originals as `sub_X_gen`): `AMPED2_SKIP_LOGOS=1` (default in
+    `run.sh`) and `AMPED2_SKIP_INTRO=1`.
+  - **Input**: `scripts/run.sh` starts the game with `RECOMP_PAD_LIVE=logs/pad_live.txt`; `scripts/press.sh start`,
+    `a:400`, `down a`, `lt+rt` … append to it (the emulated USB pad presses each new line). `RECOMP_PAD_SCRIPT` for
+    timed sequences. `scripts/test_pad.sh` (virtual SDL pad, from SSX3-Recomp) passes.
+  - Reached: legal/ESRB screen and the title "PRESS START TO BEGIN", correct in the CPU rasteriser at ~6 fps.
+    Profile: ~80 % rasteriser (sample_tex, xf_rows, nv2a_rc_eval, read_rgb, blending), the rest D3D spins waiting
+    for it → the Vulkan back end is next. XPP callback `0x0032FC8B` seeded (9 seeds; needs a disasm run).

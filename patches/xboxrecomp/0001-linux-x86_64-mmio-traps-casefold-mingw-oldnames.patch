@@ -1,3 +1,57 @@
+diff --git a/src/apu/apu_core.c b/src/apu/apu_core.c
+index 1f664a3..f27b705 100644
+--- a/src/apu/apu_core.c
++++ b/src/apu/apu_core.c
+@@ -337,9 +337,15 @@ void mcpx_apu_write(void *opaque, hwaddr addr, uint64_t val,
+          * the title writes (0, so far, always) becomes the new start. */
+         qatomic_set(&d->regs[addr], (uint32_t)val);
+         d->sample_count = val;
++        d->ssl_backlog = 0;
+         break;
+     case NV_PAPU_ISTS:
+         qatomic_and(&d->regs[NV_PAPU_ISTS], ~(uint32_t)val);
++        /* Acknowledged an SSL tick with more queued: the next one at once. */
++        if ((val & NV_PAPU_ISTS_SSLINTSTS) && d->ssl_backlog) {
++            d->ssl_backlog--;
++            qatomic_or(&d->regs[NV_PAPU_ISTS], NV_PAPU_ISTS_SSLINTSTS);
++        }
+         update_irq(d);
+         qemu_cond_broadcast(&d->cond);
+         break;
+@@ -1137,9 +1143,32 @@ static void *mcpx_apu_frame_thread(void *arg)
+                     && (sectl & NV_PAPU_SECTL_XCNTMODE)
+                            != NV_PAPU_SECTL_XCNTMODE_OFF) {
+                 d->sample_count -= ssl;
+-                qatomic_or(&d->regs[NV_PAPU_ISTS], NV_PAPU_ISTS_SSLINTSTS);
++                d->ssl_ticks++;
++                /* One tick per acknowledge: a tick that finds the previous one
++                 * still pending is queued, not merged into the same bit
++                 * (DirectSound's clock is the number of ticks it serviced). */
++                if (qatomic_read(&d->regs[NV_PAPU_ISTS]) & NV_PAPU_ISTS_SSLINTSTS) {
++                    d->ssl_backlog++;
++                    d->ssl_merged++;
++                } else {
++                    qatomic_or(&d->regs[NV_PAPU_ISTS], NV_PAPU_ISTS_SSLINTSTS);
++                }
+                 d->set_irq = true;
+             }
++            {
++                static int stats = -1;
++                static uint32_t last_ticks;
++                if (stats < 0) {
++                    const char *e = getenv("RECOMP_APU_SSL_STATS");
++                    stats = e && *e == '1';
++                }
++                if (stats && d->ssl_ticks - last_ticks >= 117) {   /* ~5 s */
++                    fprintf(stderr, "[APU] SSL ticks %u, queued behind a pending one %u, "
++                                    "backlog %u\n",
++                            d->ssl_ticks, d->ssl_merged, d->ssl_backlog);
++                    last_ticks = d->ssl_ticks;
++                }
++            }
+         }
+ 
+         /* What xemu's frame thread does after each frame: turn a pending
 diff --git a/src/apu/apu_mmio_hook.c b/src/apu/apu_mmio_hook.c
 index 235140f..c223d57 100644
 --- a/src/apu/apu_mmio_hook.c
@@ -96,6 +150,92 @@ index 235140f..c223d57 100644
  
  #if !defined(_WIN32) && defined(__aarch64__)
  /* POSIX arm64: the same hook over sigaction + ucontext, with the A64 decoder
+diff --git a/src/apu/apu_state.h b/src/apu/apu_state.h
+index f4fca14..0f310a4 100644
+--- a/src/apu/apu_state.h
++++ b/src/apu/apu_state.h
+@@ -490,6 +490,12 @@ struct MCPXAPUState {
+     /* The sequencer's sample counter (what XGSCNT reads back). Resets when
+      * the title writes XGSCNT; advances 48 kHz while the sequencer runs. */
+     uint64_t sample_count;
++    /* SSL ticks not yet delivered because the previous one was still pending
++     * in ISTS (the title had not acknowledged it). DirectSound counts these
++     * ticks as its clock, so each one dropped made that clock lose 2048
++     * samples; they are now handed out one per acknowledge. */
++    uint32_t ssl_backlog;
++    uint32_t ssl_ticks, ssl_merged;   /* stats: raised, would have been lost */
+ 
+     int ep_frame_div;
+     int sleep_acc_us;
+diff --git a/src/apu/apu_vp.c b/src/apu/apu_vp.c
+index 128d86f..cdf0bc4 100644
+--- a/src/apu/apu_vp.c
++++ b/src/apu/apu_vp.c
+@@ -47,6 +47,11 @@ static const struct {
+  * Notify status helper
+  * ============================================================ */
+ 
++/* RECOMP_APU_SSL_STATS: stream (SSL) bookkeeping per 5 s, all voices:
++ * lists handed in by DirectSound, lists played to the end and notified, and
++ * fetches that found no list queued (the voice starved). */
++static unsigned s_ssl_set, s_ssl_done, s_ssl_starved;
++
+ static void set_notify_status(MCPXAPUState *d, uint32_t v, int notifier,
+                               int status)
+ {
+@@ -458,6 +463,7 @@ static void fe_method(MCPXAPUState *d, uint32_t method, uint32_t argument)
+             GET_MASK(argument, NV1BA0_PIO_SET_VOICE_SSL_A_BASE);
+         d->vp.ssl[current_voice].count[ssl] =
+             (uint8_t)GET_MASK(argument, NV1BA0_PIO_SET_VOICE_SSL_A_COUNT);
++        s_ssl_set++;
+         break;
+     }
+     case NV1BA0_PIO_SET_VOICE_SSL_B: {
+@@ -468,6 +474,7 @@ static void fe_method(MCPXAPUState *d, uint32_t method, uint32_t argument)
+             GET_MASK(argument, NV1BA0_PIO_SET_VOICE_SSL_A_BASE);
+         d->vp.ssl[current_voice].count[ssl] =
+             (uint8_t)GET_MASK(argument, NV1BA0_PIO_SET_VOICE_SSL_A_COUNT);
++        s_ssl_set++;
+         break;
+     }
+ 
+@@ -1132,6 +1139,7 @@ static int voice_get_samples(MCPXAPUState *d, uint32_t v, float samples[][2],
+         count = d->vp.ssl[v].count[ssl_index];
+ 
+         if (count == 0) {
++            s_ssl_starved++;
+             voice_set_mask(d, (uint16_t)v, NV_PAVS_VOICE_PAR_OFFSET,
+                            NV_PAVS_VOICE_PAR_OFFSET_CBO, 0);
+             d->vp.ssl[v].ssl_seg = 0;
+@@ -1278,6 +1286,7 @@ static int voice_get_samples(MCPXAPUState *d, uint32_t v, float samples[][2],
+                 d->vp.ssl[v].ssl_seg = 0;
+                 set_notify_status(d, v, MCPX_HW_NOTIFIER_SSLA_DONE + ssl_index,
+                                   NV1BA0_NOTIFICATION_STATUS_DONE_SUCCESS);
++                s_ssl_done++;
+             }
+         } else {
+             if (loop) {
+@@ -1632,6 +1641,20 @@ static void vp_trace_positions(MCPXAPUState *d)
+ void mcpx_apu_vp_frame(MCPXAPUState *d,
+                         float mixbins[NUM_MIXBINS][NUM_SAMPLES_PER_FRAME])
+ {
++    {
++        static int on = -1;
++        static unsigned frames;
++        if (on < 0) {
++            const char *e = getenv("RECOMP_APU_SSL_STATS");
++            on = e && *e == '1';
++        }
++        if (on && ++frames >= 7500) {          /* 5 s of 32-sample frames */
++            fprintf(stderr, "[APU] streams/5s: lists set %u, played+notified %u, "
++                            "starved fetches %u\n", s_ssl_set, s_ssl_done, s_ssl_starved);
++            frames = 0;
++            s_ssl_set = s_ssl_done = s_ssl_starved = 0;
++        }
++    }
+     memset(d->vp.sample_buf, 0, sizeof(d->vp.sample_buf));
+ 
+     for (int list = 0; list < 3; list++) {
 diff --git a/src/kernel/CMakeLists.txt b/src/kernel/CMakeLists.txt
 index c643f72..157256b 100644
 --- a/src/kernel/CMakeLists.txt
@@ -109,10 +249,32 @@ index c643f72..157256b 100644
      nv2a_combiner.c
  )
 diff --git a/src/kernel/kernel_bridge.c b/src/kernel/kernel_bridge.c
-index 965dd08..7fae54f 100644
+index 965dd08..a3459d8 100644
 --- a/src/kernel/kernel_bridge.c
 +++ b/src/kernel/kernel_bridge.c
-@@ -2689,6 +2689,7 @@ static int kernel_raise_interrupt(uint32_t vector)
+@@ -2566,6 +2566,12 @@ static volatile LONG g_dpc_head, g_dpc_tail;
+  * Running a driver's DPC twice for one interrupt makes it walk a done list it
+  * has already consumed. */
+ static CRITICAL_SECTION g_dpc_lock;
++/* Wakes the timer thread when a DPC is queued. DPCs used to wait for the
++ * thread's next fixed Sleep(10) (more on Linux), so every interrupt's deferred
++ * half ran 10-20 ms late. DirectSound appends a stream's next audio segments
++ * from its DPC; XMV feeds it ~10 ms packets, so the voices ran dry between
++ * DPCs and Amped 2's movies (paced by their audio) played at ~1/6 speed. */
++static HANDLE g_dpc_wake;
+ static INIT_ONCE g_dpc_lock_once = INIT_ONCE_STATIC_INIT;
+ 
+ static BOOL CALLBACK dpc_lock_init(PINIT_ONCE o, PVOID p, PVOID *c)
+@@ -2611,6 +2617,8 @@ static void bridge_KeInsertQueueDpc(void)
+     BRIDGE_MEM8(dpc + 2) = 1;
+     g_dpc_tail = next;
+     LeaveCriticalSection(&g_dpc_lock);
++    if (g_dpc_wake)
++        SetEvent(g_dpc_wake);
+     g_eax = 1;
+ }
+ 
+@@ -2689,6 +2697,7 @@ static int kernel_raise_interrupt(uint32_t vector)
   * refresh rate from this will read 60; a title that needs the real one wants
   * the mode AvSetDisplayMode was given, which is recorded a few files away.
   */
@@ -120,7 +282,7 @@ index 965dd08..7fae54f 100644
  #define XBOX_NV2A_REG_BASE     0xFD000000u
  #define NV2A_PMC_INTR_0        0x00000100u
  #define NV2A_PMC_INTR_PCRTC    (1u << 24)
-@@ -2720,11 +2721,20 @@ static void kernel_vblank_tick(void)
+@@ -2720,11 +2729,20 @@ static void kernel_vblank_tick(void)
      next_ms = now + 16;                       /* ~60 Hz */
      InterlockedIncrement(&g_vblank_total);
  
@@ -143,6 +305,24 @@ index 965dd08..7fae54f 100644
  
      {
          static unsigned n;
+@@ -3019,11 +3037,16 @@ static DWORD WINAPI kernel_timer_thread(LPVOID unused)
+         g_fs_base = tib;
+     }
+ 
++    g_dpc_wake = CreateEventA(NULL, FALSE, FALSE, NULL);   /* auto-reset */
+     for (;;) {
+         long long now;
+         int i;
+ 
+-        Sleep(10);
++        /* Up to 10 ms, as before, but a queued DPC ends the wait at once. */
++        if (g_dpc_wake)
++            WaitForSingleObject(g_dpc_wake, 10);
++        else
++            Sleep(10);
+         kernel_vblank_tick();  /* the GPU's frame clock */
+         kernel_drain_dpcs();   /* deferred work, before due timers */
+         now = (long long)GetTickCount64();
 diff --git a/src/kernel/kernel_path.c b/src/kernel/kernel_path.c
 index 37c3621..f4683ec 100644
 --- a/src/kernel/kernel_path.c
@@ -306,10 +486,10 @@ index 327f01d..caeb766 100644
  typedef struct {
 diff --git a/src/kernel/nv2a_overlay.c b/src/kernel/nv2a_overlay.c
 new file mode 100644
-index 0000000..20a1b1f
+index 0000000..b58a8d6
 --- /dev/null
 +++ b/src/kernel/nv2a_overlay.c
-@@ -0,0 +1,282 @@
+@@ -0,0 +1,341 @@
 +/*
 + * nv2a_overlay.c -- the NV2A video overlay (PVIDEO). See nv2a_overlay.h.
 + *
@@ -389,6 +569,7 @@ index 0000000..20a1b1f
 +
 +/* The latched frame. */
 +static uint8_t  *s_px;               /* w * h * 2 bytes, packed */
++static uint32_t *s_rgb;              /* the same frame as XRGB8888, w * h */
 +static uint32_t  s_w, s_h, s_yuy2, s_keyed, s_key;
 +static uint32_t  s_out_x, s_out_y, s_out_w, s_out_h;
 +static uint32_t  s_in_s, s_in_t, s_ds_dx, s_dt_dy;
@@ -403,13 +584,30 @@ index 0000000..20a1b1f
 +    return v < 0 ? 0u : v > 255 ? 255u : (uint32_t)v;
 +}
 +
-+/* BT.601 studio range, as the NV2A's overlay converter. */
++/* BT.601 studio range, as the NV2A's overlay converter. Table-driven: the
++ * per-component products are looked up, so a pixel costs adds and clamps. */
++static int s_lut_y[256], s_lut_rv[256], s_lut_gu[256], s_lut_gv[256], s_lut_bu[256];
++static int s_lut_ready;
++
++static void lut_init(void)
++{
++    int i;
++    for (i = 0; i < 256; i++) {
++        s_lut_y[i]  = (i - 16) * 298 + 128;
++        s_lut_rv[i] = 409 * (i - 128);
++        s_lut_gu[i] = -100 * (i - 128);
++        s_lut_gv[i] = -208 * (i - 128);
++        s_lut_bu[i] = 516 * (i - 128);
++    }
++    s_lut_ready = 1;
++}
++
 +static inline uint32_t yuv_to_xrgb(int y, int u, int v)
 +{
-+    int c = (y - 16) * 298, d = u - 128, e = v - 128;
-+    return clamp8((c + 409 * e + 128) >> 8) << 16
-+         | clamp8((c - 100 * d - 208 * e + 128) >> 8) << 8
-+         | clamp8((c + 516 * d + 128) >> 8);
++    int c = s_lut_y[y];
++    return clamp8((c + s_lut_rv[v]) >> 8) << 16
++         | clamp8((c + s_lut_gu[u] + s_lut_gv[v]) >> 8) << 8
++         | clamp8((c + s_lut_bu[u]) >> 8);
 +}
 +
 +/* Pixel x of row `row` (packed 4:2:2, two pixels per 4 bytes). */
@@ -511,13 +709,35 @@ index 0000000..20a1b1f
 +        return;
 +
 +    LOCK();
-+    if (!s_px)
++    if (!s_px) {
 +        s_px = (uint8_t *)malloc((size_t)MAX_W * MAX_H * 2u);
++        s_rgb = (uint32_t *)malloc((size_t)MAX_W * MAX_H * 4u);
++        if (!s_px || !s_rgb) {
++            free(s_px); free(s_rgb);
++            s_px = NULL; s_rgb = NULL;
++        }
++    }
++    if (!s_lut_ready)
++        lut_init();
 +    if (s_px) {
++        int changed = !s_active || w != s_w || h != s_h
++                   || (((fmt & FMT_COLOR_YUY2) != 0) != (s_yuy2 != 0));
 +        src = (const uint8_t *)((uintptr_t)src_va + xbox_GetMemoryOffset());
-+        for (y = 0; y < h; y++)
-+            memcpy(s_px + (size_t)y * w * 2u, src + (size_t)y * pitch,
-+                   (size_t)w * 2u);
++        /* Titles re-submit the frame they already showed every vblank (XMV
++         * does until its clock says the next one is due): only a real change
++         * is a new frame, worth converting and presenting again. */
++        for (y = 0; y < h; y++) {
++            uint8_t *dst_row = s_px + (size_t)y * w * 2u;
++            const uint8_t *src_row = src + (size_t)y * pitch;
++            if (!changed && memcmp(dst_row, src_row, (size_t)w * 2u) == 0)
++                continue;
++            changed = 1;
++            memcpy(dst_row, src_row, (size_t)w * 2u);
++        }
++        if (!changed) {
++            UNLOCK();
++            return;
++        }
 +        s_w = w;
 +        s_h = h;
 +        s_yuy2 = (fmt & FMT_COLOR_YUY2) != 0;
@@ -535,6 +755,15 @@ index 0000000..20a1b1f
 +        if (!s_out_h) s_out_h = h;
 +        if (!s_ds_dx) s_ds_dx = 1u << 20;
 +        if (!s_dt_dy) s_dt_dy = 1u << 20;
++        {
++            uint32_t x;
++            for (y = 0; y < h; y++) {
++                const uint8_t *row = s_px + (size_t)y * w * 2u;
++                uint32_t *out = s_rgb + (size_t)y * w;
++                for (x = 0; x < w; x++)
++                    out[x] = fetch(row, x, s_yuy2);
++            }
++        }
 +        s_active = 1;
 +        s_seq++;
 +        if (s_seq == 1)
@@ -553,40 +782,50 @@ index 0000000..20a1b1f
 +{
 +    uint32_t ox, oy, x, y;
 +    uint64_t s0, t;
++    int unscaled;
 +
 +    if (!s_active || !dst)
 +        return 0;
 +    LOCK();
-+    if (!s_px || !s_w || !s_h) {
++    if (!s_rgb || !s_w || !s_h) {
 +        UNLOCK();
 +        return 0;
 +    }
++    unscaled = s_ds_dx == (1u << 20) && s_dt_dy == (1u << 20)
++            && !s_in_s && !s_in_t && !s_keyed;
 +    for (oy = 0; oy < s_out_h; oy++) {
++        uint32_t sy;
++        uint32_t *out;
++        const uint32_t *row;
 +        y = s_out_y + oy;
 +        if (y >= h)
 +            break;
 +        /* 12.4 origin + 12.20 step, in 12.20. */
 +        t = ((uint64_t)s_in_t << 16) + (uint64_t)oy * s_dt_dy;
-+        {
-+            uint32_t sy = (uint32_t)(t >> 20);
-+            const uint8_t *row;
-+            uint32_t *out = dst + (size_t)y * pitch_px;
-+            if (sy >= s_h)
-+                sy = s_h - 1;
-+            row = s_px + (size_t)sy * s_w * 2u;
-+            s0 = (uint64_t)s_in_s << 16;
-+            for (ox = 0; ox < s_out_w; ox++) {
-+                uint32_t sx;
-+                x = s_out_x + ox;
-+                if (x >= w)
-+                    break;
-+                if (s_keyed && (out[x] & 0xFFFFFFu) != (s_key & 0xFFFFFFu))
-+                    continue;
-+                sx = (uint32_t)((s0 + (uint64_t)ox * s_ds_dx) >> 20);
-+                if (sx >= s_w)
-+                    sx = s_w - 1;
-+                out[x] = fetch(row, sx, s_yuy2);
-+            }
++        sy = (uint32_t)(t >> 20);
++        if (sy >= s_h)
++            sy = s_h - 1;
++        row = s_rgb + (size_t)sy * s_w;
++        out = dst + (size_t)y * pitch_px;
++        if (unscaled) {
++            uint32_t n = s_out_w;
++            if (n > s_w) n = s_w;
++            if (s_out_x + n > w) n = s_out_x < w ? w - s_out_x : 0;
++            memcpy(out + s_out_x, row, (size_t)n * 4u);
++            continue;
++        }
++        s0 = (uint64_t)s_in_s << 16;
++        for (ox = 0; ox < s_out_w; ox++) {
++            uint32_t sx;
++            x = s_out_x + ox;
++            if (x >= w)
++                break;
++            if (s_keyed && (out[x] & 0xFFFFFFu) != (s_key & 0xFFFFFFu))
++                continue;
++            sx = (uint32_t)((s0 + (uint64_t)ox * s_ds_dx) >> 20);
++            if (sx >= s_w)
++                sx = s_w - 1;
++            out[x] = row[sx];
 +        }
 +    }
 +    UNLOCK();
@@ -1249,7 +1488,7 @@ index 8acb0af..c7a266b 100644
  /* Run the program from the start slot on one vertex. Inputs are the ten
   * attribute values as floats. Returns 0 if there is no program to run (no
 diff --git a/src/kernel/xbox_memory_layout.c b/src/kernel/xbox_memory_layout.c
-index 362cefe..5ecd60f 100644
+index 362cefe..ef21fbe 100644
 --- a/src/kernel/xbox_memory_layout.c
 +++ b/src/kernel/xbox_memory_layout.c
 @@ -655,8 +655,22 @@ static LONG CALLBACK ac97_write_veh(PEXCEPTION_POINTERS ep)
@@ -1441,6 +1680,49 @@ index 362cefe..5ecd60f 100644
 +            }
          }
      }
+ }
+@@ -1562,7 +1660,41 @@ static DWORD WINAPI nv2a_ack_thread(LPVOID param)
+         *(volatile uint32_t *)((uintptr_t)(XBOX_KERNEL_DATA_BASE + KDATA_TICK_COUNT)
+                                + g_memory_offset) = GetTickCount();
+ 
+-        Sleep(0);  /* yield; the waiter is spinning on another core */
++        /* Yield while the GPU is being fed -- the title's D3D spins on
++         * another core for the bits cleared above -- but back off once the
++         * pushbuffer has been quiet for a while. A bare Sleep(0) loop kept
++         * one host core near 100 % for nothing during movies, menus and
++         * loading (Amped 2: ~50 % of all user time in this thread).
++         * RECOMP_ACK_IDLE_US=<us> sets the idle sleep (default 200; 0 = the
++         * old always-yield behaviour). POSIX only: Windows' Sleep(1) can
++         * oversleep a whole 15.6 ms timer tick. */
++        {
++            static int idle_us = -1;
++            static uint32_t seen_put;
++            static unsigned quiet;
++            uint32_t put_now = *(volatile uint32_t *)((char *)regs + NV2A_USER_DMA_PUT);
++            if (idle_us < 0) {
++                const char *e = getenv("RECOMP_ACK_IDLE_US");
++                idle_us = e ? atoi(e) : 200;
++                if (idle_us < 0) idle_us = 0;
++            }
++            if (put_now != seen_put) {
++                seen_put = put_now;
++                quiet = 0;
++            } else if (quiet < 0xFFFFFFFFu) {
++                quiet++;
++            }
++#ifndef _WIN32
++            /* ...unless a vblank is outstanding: D3D's vblank handler
++             * (Amped 2: 0x00322390) spins until the bits clear here. */
++            if (idle_us && quiet > 4000 && !s_vblank_pending) {
++                usleep((useconds_t)idle_us);
++            } else
++#endif
++            {
++                Sleep(0);  /* yield; the waiter is spinning on another core */
++            }
++        }
+     }
+     return 0;
  }
 diff --git a/src/kernel/xbox_memory_layout.h b/src/kernel/xbox_memory_layout.h
 index 14eee45..5293311 100644
@@ -1728,7 +2010,7 @@ index d45d8bb..92cd7aa 100644
                          "%02X %02X %02X %02X %02X %02X\n",
                  hc->index, xbox_va - hc->base,
 diff --git a/src/video/fb_present_sdl.c b/src/video/fb_present_sdl.c
-index 87b7ef7..3aead9d 100644
+index 87b7ef7..2cf1f68 100644
 --- a/src/video/fb_present_sdl.c
 +++ b/src/video/fb_present_sdl.c
 @@ -48,6 +48,7 @@
@@ -1748,7 +2030,17 @@ index 87b7ef7..3aead9d 100644
              do {
                  /* Keys for the pad stand-in, and the window events that
                   * release them; it only reads the event. */
-@@ -395,6 +396,40 @@ int xbox_HostWindowMain(int (*guest_main)(void))
+@@ -383,7 +384,9 @@ int xbox_HostWindowMain(int (*guest_main)(void))
+         }
+         pthread_mutex_unlock(&s_lock);
+ 
++        int frame_new = 0;               /* a flip arrived this round */
+         if (seq != shown_seq) {
++            frame_new = 1;
+             shown_seq = seq;
+             px = s_slot[s_front].px;
+             bpp = s_slot[s_front].bpp;
+@@ -395,6 +398,45 @@ int xbox_HostWindowMain(int (*guest_main)(void))
              if (bpp == 2 || bpp == 4)
                  px = (const uint8_t *)((uintptr_t)s_fb_va + xbox_GetMemoryOffset());
          }
@@ -1759,7 +2051,10 @@ index 87b7ef7..3aead9d 100644
 +            static uint32_t ov_buf[FB_W * FB_H];
 +            static uint64_t ov_shown;
 +            uint64_t ov = nv2a_overlay_seq();
-+            if (nv2a_overlay_active() && (px || ov != ov_shown)) {
++            /* Only when something changed: a new overlay frame or a new
++             * flip underneath. Re-composing every 16 ms cost a fifth of this
++             * thread for nothing while a movie's frame stood still. */
++            if (nv2a_overlay_active() && (frame_new || ov != ov_shown)) {
 +                uint32_t i, n = FB_W * FB_H;
 +                const uint8_t *base = px ? px : (s_slot[s_front].px && shown_seq
 +                                                 ? s_slot[s_front].px : NULL);
@@ -1784,6 +2079,8 @@ index 87b7ef7..3aead9d 100644
 +                px = (const uint8_t *)ov_buf;
 +                bpp = 4;
 +                pitch = FB_W * 4u;
++            } else if (nv2a_overlay_active()) {
++                px = NULL;                   /* the texture already shows it */
 +            }
 +        }
          if (px) {

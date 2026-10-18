@@ -15,7 +15,11 @@
 #   RECOMP_FB_DUMP=<prefix> BMP frame dumps
 #   RECOMP_USB=1 / RECOMP_KEYBOARD=1   emulated USB pad; keyboard = pad 1 (Enter=Start, Z=A, X=B, arrows=D-pad …)
 #   RECOMP_USB_PADS=n       more emulated pads on the USB bus, default 1
+#   AMPED2_SKIP_LOGOS=1     skip the MGS / XSN logo movies (default here); AMPED2_SKIP_INTRO=1 skips the intro too
 #   AMPED2_PAD_TRACE=1      log every controller button change
+#   RECOMP_PAD_LIVE=<file>  emulated pad 1 presses every line appended to <file> – default logs/pad_live.txt,
+#                           emptied at every start; send keys with scripts/press.sh start / a:400 / down …
+#   RECOMP_PAD_SCRIPT=40000:start,44000:a   timed presses (ms after the pad enumerates), or =@file
 #   RECOMP_WATCHDOG_SECS=n / RECOMP_KERNEL_LOG_BUDGET=n   hang watchdog / longer kernel trace
 source "$(dirname "$0")/_common.sh"
 [ -x "$ROOT/build/amped2_recomp" ] || { echo "No build. First run: scripts/build.sh" >&2; exit 1; }
@@ -28,4 +32,7 @@ export RECOMP_PB_EXEC="${RECOMP_PB_EXEC:-1}"
 export RECOMP_FB_WINDOW="${RECOMP_FB_WINDOW:-1}"
 export RECOMP_USB="${RECOMP_USB:-1}"
 export RECOMP_KEYBOARD="${RECOMP_KEYBOARD:-1}"
+export AMPED2_SKIP_LOGOS="${AMPED2_SKIP_LOGOS:-1}"   # MGS/XSN logos off (AMPED2_SKIP_INTRO=1: the intro too)
+export RECOMP_PAD_LIVE="${RECOMP_PAD_LIVE:-$ROOT/logs/pad_live.txt}"
+mkdir -p "$(dirname "$RECOMP_PAD_LIVE")" && : > "$RECOMP_PAD_LIVE"
 exec ./build/amped2_recomp "$@"

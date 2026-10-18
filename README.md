@@ -20,8 +20,9 @@ It follows the same route as SSX3-Recomp (our SSX 3 port with the same toolkit):
 | Pipeline: 14,365 functions lifted, 0 translation errors, 1.96 M lines of C | ✅ |
 | Host and input ported from SSX3-Recomp, Linux build (CPU renderer, multi-threaded) | ✅ |
 | Boot: XAPI (media check bypassed), D3D, XACT/WMA audio, XNet offline, splash screen | ✅ |
-| Movies through the NV2A video overlay (MGS logo) | 🟡 shown, but at ~1/6 speed |
-| Front end → riding | ⬜ |
+| Movies through the NV2A video overlay, real-time (logos, intro) | ✅ |
+| Legal screen, title screen (CPU renderer ~6 fps) | ✅ |
+| Main menu → riding | ⬜ |
 | Vulkan renderer | ⬜ after the CPU path works |
 
 Plan and open items: [docs/TODO.md](docs/TODO.md), running log: [docs/notes.md](docs/notes.md).
@@ -39,6 +40,11 @@ scripts/extract_iso.sh "/path/to/Amped 2 (Xbox).iso"   # or an already extracted
 scripts/run_pipeline.sh                            # parse, disasm, func_id, abi, recomp -> src/recomp/gen/
 scripts/doctor.sh                                  # bring-up report
 ```
+
+`scripts/run.sh` starts the game (CPU renderer, logos skipped). Useful switches: `AMPED2_SKIP_INTRO=1` (skip the
+intro movie too), `AMPED2_SKIP_LOGOS=0` (show the MGS/XSN logos). While it runs, `scripts/press.sh start`
+(or `a`, `down`, `a:400`, `lt+rt` …) sends controller input; the keyboard works as pad 1 as well
+(Enter = Start, Z = A, X = B, arrows = D-pad).
 
 Optional: `scripts/fetch_references.sh` (reference ports into `reference/`), `scripts/ghidra.sh`
 (Ghidra names for the generated code, needs Ghidra under `/opt/ghidra` or `GHIDRA_HOME`).

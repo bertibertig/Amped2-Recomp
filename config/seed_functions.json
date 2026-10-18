@@ -13,5 +13,35 @@
   "start": "0x0031CB60",
   "observed": true,
   "note": "Indirect-call target observed at runtime; decodes as a function body."
+ },
+ {
+  "start": "0x00263837",
+  "observed": true,
+  "note": "PsCreateSystemThreadEx StartContext1 observed at runtime; decodes as a function body."
+ },
+ {
+  "start": "0x003120E9",
+  "observed": true,
+  "note": "PsCreateSystemThreadEx StartContext1 observed at runtime; decodes as a function body."
+ },
+ {
+  "start": "0x0032E3A4",
+  "observed": true,
+  "note": "Indirect-call target observed at runtime; decodes as a function body."
+ },
+ {
+  "start": "0x0032EDAB",
+  "observed": true,
+  "note": "Indirect-call target observed at runtime; decodes as a function body."
+ },
+ {
+  "start": "0x003306DF",
+  "observed": true,
+  "note": "Indirect-call target observed at runtime; decodes as a function body."
+ },
+ {
+  "start": "0x0032FC8B",
+  "observed": true,
+  "note": "Indirect-call target observed at runtime; decodes as a function body."
  }
 ]

@@ -17,6 +17,7 @@ export RECOMP_PB_EXEC="${RECOMP_PB_EXEC:-1}"          # execute the pushbuffer (
 export RECOMP_FB_WINDOW="${RECOMP_FB_WINDOW:-1}"      # window showing the framebuffer
 export RECOMP_USB="${RECOMP_USB:-1}"                  # emulated USB controller (XPP/OHCI)
 export RECOMP_KEYBOARD="${RECOMP_KEYBOARD:-1}"        # keyboard = controller 1 (Enter=Start, Z=A, X=B, arrows=D-pad …)
+export AMPED2_SKIP_LOGOS="${AMPED2_SKIP_LOGOS:-1}"   # MGS/XSN logos off (AMPED2_SKIP_INTRO=1: the intro too)
 
 winpath() { local p="Z:$1"; echo "${p//\//\\}"; }
 out=$(mktemp "${TMPDIR:-/tmp}/amped2_win.XXXXXX"); bat=$out.cmd
@@ -27,7 +28,7 @@ printf '@echo off\r\ncd /d "%s"\r\n%s > "%s" 2>&1\r\necho run_win_exit=%%ERRORLE
 
 envs=(WINEPREFIX="${WINEPREFIX:-$HOME/.local/share/amped2-recomp-proton}"
       PROTONPATH="${PROTONPATH:-GE-Proton}" GAMEID="${GAMEID:-umu-default}")
-while IFS= read -r kv; do envs+=("$kv"); done < <(env | grep -E '^RECOMP_' || true)
+while IFS= read -r kv; do envs+=("$kv"); done < <(env | grep -E '^(RECOMP|AMPED2)_' || true)
 cd "$ROOT"
 env "${envs[@]}" timeout -k 10 -s INT "${RUN_TIMEOUT:-60}" umu-run cmd.exe /c "$(winpath "$bat")" </dev/null >"$out.umu" 2>&1 || true
 rc=$(grep -a -o 'run_win_exit=[0-9-]*' "$out" 2>/dev/null | tail -1 | cut -d= -f2 || true)

@@ -78,6 +78,14 @@ All of them are candidates for an upstream PR to sp00nznet/xboxrecomp.
   vblank latches a pending overlay buffer (frame copied out of guest memory, BUFFER bit cleared as the hardware does,
   STOP honoured); the SDL window composes it over the shown surface (YUY2/UYVY, scaling, colour key).
   `RECOMP_OVERLAY_DUMP=<prefix>` dumps every 30th frame. Not yet in the GDI window (fb_present.c).
+- `kernel_bridge.c`: **event-driven DPC drain** – `KeInsertQueueDpc` wakes the timer thread (it used to run DPCs only
+  after a fixed `Sleep(10)`); fixes starving DirectSound stream voices and movies paced by them (Amped 2: ~1/6 speed).
+- `apu_core.c`/`apu_state.h`: SSL ticks queue (`ssl_backlog`) instead of merging into a pending ISTS bit;
+  `RECOMP_APU_SSL_STATS=1` prints SSL ticks and stream list stats (`apu_vp.c`) every 5 s.
+- `xbox_memory_layout.c`: `nv2a_ack_thread` backs off (`RECOMP_ACK_IDLE_US`, POSIX) when the pushbuffer is quiet and no
+  vblank is pending.
+- `nv2a_overlay.c`: frame change detection, convert once per new frame, fast unscaled compose; `fb_present_sdl.c`
+  composes only on a new overlay frame or flip.
 
 Verified: Linux build + Windows cross build (MinGW) compile; own decoder test (8 cases, ucontext) green;
 `tools.recomp.test_reserved_idents` green; SSX 3 on Linux reaches the same state as under Proton
