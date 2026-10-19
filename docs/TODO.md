@@ -32,10 +32,12 @@
 - [x] Dot-product modes + real cube maps in the Vulkan shader/back end (rider matches the CPU path)
 - [x] Rider upper body, gloves, head and hair: RunPushBuffer JUMPs followed, D3D's software-method patch done by the executor (matches xemu, 60 fps)
 - [ ] Software methods 0x08/0x09 (PGRAPH register writes from D3D's GPU interrupt handler) are logged, not modelled
-- [ ] Rider in a ride (Millicent 1) still to check against xemu once riding works
+- [x] Rider in a ride (Millicent 1) checked against xemu: complete (hair, hands, upper body), HUD and goals board shown
+- [x] Riding at ~55 fps: texture re-validation fixed, vertex ring grows, vertex programs on the GPU (`nv2a_vsh.vert`)
+- [ ] Rider shadow: D16 depth texture (format 0x30) as a shadow map – sample the depth surface with a compare sampler
+- [ ] 60 fps steady (menus and race sit at ~55: vsync pacing of FLIP_STALL / the vblank wait)
 - [ ] Per-title save root: `~/.local/share/xboxrecomp/Cache` (z:) is shared with SSX3-Recomp (RECOMP_SAVE_DIR per port?)
-- [ ] First run on the mountain (Millicent 1): entering the Evergreen session crashes – ICALLs 0x000A5A70 and
-      0x0024F240 unresolved, then SIGSEGV in sub_00241910 → seeds
+- [x] First run on the mountain (Millicent 1): entering the Evergreen session crashed – seeds 0x000A5A70, 0x0024F240
 - [x] Overlay in the Vulkan back end (idle presents between flips)
 - [ ] Colour-keyed overlays in the Vulkan path
 

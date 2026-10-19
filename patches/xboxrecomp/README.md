@@ -100,6 +100,14 @@ All of them are candidates for an upstream PR to sp00nznet/xboxrecomp.
 - `nv2a_pb_exec.c` (`dma_resolve`): a page the title named through MmGetPhysicalAddress for a heap address resolves to
   RAM, not to the contiguous window page with the same number (as the APU already did).
 
+- `nv2a_backend.h`, `nv2a_pb_exec.c`, `nv2a_vsh_interp.c/.h`: **vertex programs on a GPU back end**. Optional
+  `Nv2aBackend.draw_program` with `Nv2aProgramBatch` (attribute spans, rebased triangle-list indices, decoded program,
+  constants, program/constant generations, aa/uv scale, fog unit state); `backend_program_batch` hands over every
+  program batch without CXT_WRITE (`RECOMP_VSH_CPU=1` keeps the CPU path); `nv2a_vsh_export` packs the decoded program
+  (layout in the header). `backend_flush`'s state building is now `backend_state`, shared by both paths.
+  `RECOMP_VXF_STATS=1` prints CPU transform statistics. Amped 2 race: 13-15 → ~55 fps.
+- `nv2a_pb_scan.c`: logs a RunPushBuffer that returns outside its segment (rest dropped) or skips ring data.
+
 Verified: Linux build + Windows cross build (MinGW) compile; own decoder test (8 cases, ucontext) green;
 `tools.recomp.test_reserved_idents` green; SSX 3 on Linux reaches the same state as under Proton
 (APU/AC'97/DSP doorbell/APU interrupts, intro videos are opened).

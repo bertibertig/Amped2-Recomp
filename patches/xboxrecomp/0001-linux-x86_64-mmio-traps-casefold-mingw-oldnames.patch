@@ -445,7 +445,7 @@ index 37c3621..f4683ec 100644
          /* As the Win32 backend does: the bridge reads back the host path
           * the call it just made translated (the missing-file report, the
 diff --git a/src/kernel/nv2a_backend.h b/src/kernel/nv2a_backend.h
-index 327f01d..15cd7bd 100644
+index 327f01d..a1fac45 100644
 --- a/src/kernel/nv2a_backend.h
 +++ b/src/kernel/nv2a_backend.h
 @@ -20,15 +20,22 @@
@@ -494,7 +494,7 @@ index 327f01d..15cd7bd 100644
  } Nv2aTexture;
  
  typedef struct {
-@@ -82,11 +94,37 @@ typedef struct {
+@@ -82,13 +94,83 @@ typedef struct {
      uint32_t stencil_write_mask, stencil_fail, stencil_zfail, stencil_zpass;
  } Nv2aRenderState;
  
@@ -531,8 +531,54 @@ index 327f01d..15cd7bd 100644
 +    const Nv2aBatchExt *ext;        /* NULL: screen-space batch, see above */
  } Nv2aBatch;
  
++/* A batch whose vertex program the back end runs itself (draw_program):
++ * the title's untransformed vertices, the program and its constants, and a
++ * triangle list of indices. The executor does no per-vertex work for it.
++ *
++ * Attribute data is a copy-ready span: element i of attribute a is at
++ * attr[a].data + i * attr[a].stride, for i in [0, vertex_count) -- indices
++ * are rebased to the batch's lowest one. An attribute with data == NULL
++ * (size or stride 0 in the title's setup) reads imm[a] for every vertex, the
++ * value last set with SET_VERTEX_DATA*. Types are the NV097 array types:
++ * 0 D3DCOLOR (B,G,R,A bytes, read as R,G,B,A), 1 short normalised, 2 float,
++ * 4 ubyte normalised, 5 short, 6 packed 11:11:10 (CMP); anything else reads
++ * (0,0,0,1). Missing components read 0, w reads 1.
++ *
++ * The program writes oPos in screen space (D3D appends the viewport and the
++ * divide by w), w the clip-space w; a w of +0 means "already screen space"
++ * and reads as 1. x and y are then scaled by aa_scale. Colours clamp to
++ * [0,1]. The fog factor comes from oFog.x through the fog unit (fog_* below,
++ * as the executor's fog_factor). Stage 0's coordinates for a back end without
++ * combiners are oT0.xy * uv_scale (texels; uv_scale is the texture size for
++ * formats addressed 0..1, else 1). No near-plane clipping has been done:
++ * that is the back end's (w <= 0 vertices are behind the eye). */
++typedef struct {
++    const uint8_t *data;        /* NULL: use imm */
++    uint32_t       bytes;       /* readable bytes from data */
++    uint32_t       type, size, stride;
++} Nv2aProgramAttr;
++
++typedef struct {
++    const uint32_t (*program)[4];   /* nv2a_vsh_export layout */
++    uint32_t       program_len;
++    uint32_t       program_gen;     /* changes when the program does */
++    const float  (*constants)[4];   /* 192 */
++    uint32_t       constants_gen;   /* changes when any constant does */
++    Nv2aProgramAttr attr[16];
++    float          imm[16][4];
++    const uint32_t *indices;        /* triangle list, rebased */
++    uint32_t       index_count;
++    uint32_t       vertex_count;
++    float          aa_scale[2];
++    float          uv_scale[2];
++    uint32_t       fog_enable, fog_mode;
++    float          fog_param[2];
++} Nv2aProgramBatch;
++
  typedef struct {
-@@ -96,6 +134,10 @@ typedef struct {
+     /* flags: CLEAR_SURFACE bits (Z 0x1, stencil 0x2, colour 0xF0).
+      * zstencil: SET_ZSTENCIL_CLEAR_VALUE (depth in the top 24 bits for Z24S8). */
+@@ -96,6 +178,16 @@ typedef struct {
                    uint32_t flags, uint32_t argb, uint32_t zstencil);
      void (*draw)(const Nv2aSurface *s, const Nv2aBatch *b);
      void (*flip)(void);
@@ -540,10 +586,16 @@ index 327f01d..15cd7bd 100644
 +     * NV2A poll loop, flip or not. A back end presents what changes without a
 +     * flip here -- the video overlay (nv2a_overlay.h): XMV movies never flip. */
 +    void (*idle)(void);
++    /* Optional (may be NULL): draw a batch whose vertex program the back end
++     * runs (Nv2aProgramBatch above). b carries state, textures and the
++     * combiners as for draw, with no vertices. Return 0 to have the executor
++     * transform the batch itself and call draw instead. */
++    int (*draw_program)(const Nv2aSurface *s, const Nv2aBatch *b,
++                        const Nv2aProgramBatch *p);
  } Nv2aBackend;
  
  /* Register (or, with NULL, remove) the back end. Call before the title starts
-@@ -117,4 +159,17 @@ int nv2a_backend_decode_texture(const Nv2aTexture *tex, uint32_t *argb_out);
+@@ -117,4 +209,17 @@ int nv2a_backend_decode_texture(const Nv2aTexture *tex, uint32_t *argb_out);
   * the semaphore context DMA object through RAMIN. */
  void nv2a_pb_set_semaphore_target(uint32_t guest_va);
  
@@ -978,7 +1030,7 @@ index 0000000..d4ab713
 +
 +#endif /* NV2A_OVERLAY_H */
 diff --git a/src/kernel/nv2a_pb_exec.c b/src/kernel/nv2a_pb_exec.c
-index 1280565..42a1170 100644
+index 1280565..d2bb005 100644
 --- a/src/kernel/nv2a_pb_exec.c
 +++ b/src/kernel/nv2a_pb_exec.c
 @@ -129,6 +129,14 @@ static uint32_t dma_resolve(uint32_t offset)
@@ -1058,7 +1110,7 @@ index 1280565..42a1170 100644
      if (s_bcount + 3 > NV_BACKEND_MAX_VERTS)
          return NULL;
      return &s_bverts[s_bcount];
-@@ -1920,6 +1949,13 @@ static void backend_from_xf(const Nv2aVshOutput *v, Nv2aVertex *o)
+@@ -1920,38 +1949,107 @@ static void backend_from_xf(const Nv2aVshOutput *v, Nv2aVertex *o)
      o->diffuse = pack_color(v->d0);
      o->u = v->tex[0][0] * su;
      o->v = v->tex[0][1] * sv;
@@ -1069,58 +1121,62 @@ index 1280565..42a1170 100644
 +        e->fog = fog_factor(v->fog[0]);
 +        s_bext_used = 1;
 +    }
- }
- 
- /* `textured`: the batch carried texture coordinates, so the bound texture is
-@@ -1928,8 +1964,10 @@ static void backend_flush(int textured)
- {
-     Nv2aSurface surf;
-     Nv2aRenderState rs;
--    Nv2aTexture tex;
-+    Nv2aTexture tex, stex[4];
-     Nv2aBatch batch;
-+    Nv2aBatchExt ext;
++}
++
++/* A batch's state for the back end, everything but its vertices: surface,
++ * render state, stage-0 texture, and (ext_used) the extension with the
++ * combiners and every stage's texture. `textured`: the batch carried texture
++ * coordinates, so the bound texture is part of it. */
++typedef struct {
++    Nv2aSurface      surf;
++    Nv2aRenderState  rs;
++    Nv2aTexture      tex, stex[4];
++    Nv2aBatch        batch;
++    Nv2aBatchExt     ext;
++} BackendState;
++
++static void backend_state(BackendState *S, int textured, int ext_used)
++{
 +    int st;
- 
-     if (!s_bcount)
-         return;
-@@ -1939,16 +1977,59 @@ static void backend_flush(int textured)
-     batch.count = s_bcount;
-     batch.texture = NULL;
-     batch.state = &rs;
-+    batch.ext = NULL;
-+    if (s_bext_used) {
++
++    current_surface(&S->surf);
++    current_render_state(&S->rs);
++    S->batch.vertices = NULL;
++    S->batch.count = 0;
++    S->batch.texture = NULL;
++    S->batch.state = &S->rs;
++    S->batch.ext = NULL;
++    if (ext_used) {
 +        uint32_t fc = s_gpu.fog_color;
-+        memset(&ext, 0, sizeof ext);
-+        ext.vertices = s_bext;
-+        ext.rc = s_gpu.rc_seen ? &s_gpu.rc : NULL;
++        memset(&S->ext, 0, sizeof S->ext);
++        S->ext.rc = s_gpu.rc_seen ? &s_gpu.rc : NULL;
 +        for (st = 0; st < 4; st++) {
 +            const Texture *t = &s_gpu.texs[st];
++            Nv2aTexture *o = &S->stex[st];
 +            if (!t->valid || !((s_gpu.rc.stage_program >> (st * 5)) & 0x1F))
 +                continue;
-+            stex[st].offset = t->offset;
-+            stex[st].width  = t->width;
-+            stex[st].height = t->height;
++            o->offset = t->offset;
++            o->width  = t->width;
++            o->height = t->height;
 +            /* Linear or not is the format's call, as everywhere else here: a
 +             * swizzled texture keeps whatever pitch the stage last had (SSX 3's
 +             * intro video leaves its 640x480 linear one), and a back end that
 +             * took pitch != 0 for "linear" scaled the title screen's
 +             * coordinates to its corner. */
-+            stex[st].pitch  = tex_size_from_format(t->color) ? 0 : t->pitch;
-+            stex[st].color  = t->color;
-+            stex[st].addr_u = t->addr_u;
-+            stex[st].addr_v = t->addr_v;
-+            stex[st].levels = stex[st].pitch ? 1 : t->levels;
-+            stex[st].filter = t->filter;
-+            stex[st].cube_stride = t->cube ? tex_face_stride(t) : 0;
-+            ext.textures[st] = &stex[st];
++            o->pitch  = tex_size_from_format(t->color) ? 0 : t->pitch;
++            o->color  = t->color;
++            o->addr_u = t->addr_u;
++            o->addr_v = t->addr_v;
++            o->levels = o->pitch ? 1 : t->levels;
++            o->filter = t->filter;
++            o->cube_stride = t->cube ? tex_face_stride(t) : 0;
++            S->ext.textures[st] = o;
 +        }
-+        ext.clip_plane_mode = s_gpu.clip_plane_mode;
-+        memcpy(ext.eye_vector, s_gpu.eye_vector, sizeof ext.eye_vector);
++        S->ext.clip_plane_mode = s_gpu.clip_plane_mode;
++        memcpy(S->ext.eye_vector, s_gpu.eye_vector, sizeof S->ext.eye_vector);
 +        /* FOG_COLOR is R in bits 0-7, the reverse of a D3DCOLOR. */
-+        ext.fog_color = (fc & 0xFF00FF00u) | ((fc & 0xFF) << 16) | ((fc >> 16) & 0xFF);
-+        batch.ext = &ext;
-+        s_bext_used = 0;
++        S->ext.fog_color = (fc & 0xFF00FF00u) | ((fc & 0xFF) << 16) | ((fc >> 16) & 0xFF);
++        S->batch.ext = &S->ext;
 +    }
 +    /* With register combiners in use, a stage whose SHADER_STAGE_PROGRAM
 +     * mode is NONE samples nothing -- whatever texture it still has enabled
@@ -1130,23 +1186,64 @@ index 1280565..42a1170 100644
 +     * before, and a back end that multiplied by it drew the sky black. */
 +    if (s_gpu.rc_seen && !(s_gpu.rc.stage_program & 0x1F))
 +        textured = 0;
-     if (textured && s_gpu.texs[0].valid) {
-         tex.offset = s_gpu.texs[0].offset;
-         tex.width  = s_gpu.texs[0].width;
-         tex.height = s_gpu.texs[0].height;
++    if (textured && s_gpu.texs[0].valid) {
++        Nv2aTexture *t = &S->tex;
++        t->offset = s_gpu.texs[0].offset;
++        t->width  = s_gpu.texs[0].width;
++        t->height = s_gpu.texs[0].height;
++        t->pitch  = tex_size_from_format(s_gpu.texs[0].color) ? 0 : s_gpu.texs[0].pitch;
++        t->color  = s_gpu.texs[0].color;
++        t->addr_u = s_gpu.texs[0].addr_u;
++        t->addr_v = s_gpu.texs[0].addr_v;
++        t->levels = t->pitch ? 1 : s_gpu.texs[0].levels;
++        t->filter = s_gpu.texs[0].filter;
++        t->cube_stride = 0;                /* stage 0 as a plain 2D texture */
++        S->batch.texture = t;
++    }
+ }
+ 
+-/* `textured`: the batch carried texture coordinates, so the bound texture is
+- * part of it. */
+ static void backend_flush(int textured)
+ {
+-    Nv2aSurface surf;
+-    Nv2aRenderState rs;
+-    Nv2aTexture tex;
+-    Nv2aBatch batch;
++    static BackendState S;
+ 
+     if (!s_bcount)
+         return;
+-    current_surface(&surf);
+-    current_render_state(&rs);
+-    batch.vertices = s_bverts;
+-    batch.count = s_bcount;
+-    batch.texture = NULL;
+-    batch.state = &rs;
+-    if (textured && s_gpu.texs[0].valid) {
+-        tex.offset = s_gpu.texs[0].offset;
+-        tex.width  = s_gpu.texs[0].width;
+-        tex.height = s_gpu.texs[0].height;
 -        tex.pitch  = s_gpu.texs[0].pitch;
-+        tex.pitch  = tex_size_from_format(s_gpu.texs[0].color) ? 0 : s_gpu.texs[0].pitch;
-         tex.color  = s_gpu.texs[0].color;
-         tex.addr_u = s_gpu.texs[0].addr_u;
-         tex.addr_v = s_gpu.texs[0].addr_v;
+-        tex.color  = s_gpu.texs[0].color;
+-        tex.addr_u = s_gpu.texs[0].addr_u;
+-        tex.addr_v = s_gpu.texs[0].addr_v;
 -        tex.levels = s_gpu.texs[0].pitch ? 1 : s_gpu.texs[0].levels;
-+        tex.levels = tex.pitch ? 1 : s_gpu.texs[0].levels;
-         tex.filter = s_gpu.texs[0].filter;
-+        tex.cube_stride = 0;                /* stage 0 as a plain 2D texture */
-         batch.texture = &tex;
-     }
-     s_backend->draw(&surf, &batch);
-@@ -2174,40 +2255,78 @@ static void rc_texel(const Texture *t, uint32_t face, float u, float v,
+-        tex.filter = s_gpu.texs[0].filter;
+-        batch.texture = &tex;
+-    }
+-    s_backend->draw(&surf, &batch);
++    backend_state(&S, textured, s_bext_used);
++    S.batch.vertices = s_bverts;
++    S.batch.count = s_bcount;
++    if (S.batch.ext)
++        S.ext.vertices = s_bext;
++    s_bext_used = 0;
++    s_backend->draw(&S.surf, &S.batch);
+     s_gpu.tris_drawn += s_bcount / 3;
+     s_bcount = 0;
+     note_drawn();
+@@ -2174,40 +2272,78 @@ static void rc_texel(const Texture *t, uint32_t face, float u, float v,
  
  /* What texture stage `st` contributes, by its SHADER_STAGE_PROGRAM mode
   * (xemu psh.c). Returns 0 when a clip-plane stage kills the pixel. */
@@ -1154,8 +1251,7 @@ index 1280565..42a1170 100644
 +/* A cube-map lookup by direction (xemu psh.c / the GL cube rules). A texture
 + * that is not a cube map reads (x, y) as 2D. */
 +static void rc_cube_fetch(const Texture *t, float x, float y, float z, float out[4])
- {
--    const Texture *t = &s_gpu.texs[st];
++{
 +    float ax = fabsf(x), ay = fabsf(y), az = fabsf(z), ma, sc, tc;
 +    uint32_t face;
 +    if (!t->cube) {
@@ -1178,7 +1274,8 @@ index 1280565..42a1170 100644
 +/* PS_DOTMAPPING: an input texel's component (0..1) as a vector component
 + * (xemu psh.c sign1/sign2/sign3). The HILO modes read like ZERO_TO_ONE. */
 +static float rc_dotmap(uint32_t mapping, float x)
-+{
+ {
+-    const Texture *t = &s_gpu.texs[st];
 +    float b = x * 255.0f;
 +    switch (mapping & 7u) {
 +    case 1:  return (b - 128.0f) / 127.0f;                          /* -1..1 D3D */
@@ -1248,7 +1345,7 @@ index 1280565..42a1170 100644
      case 4:                                       /* PASSTHRU */
          for (j = 0; j < 4; j++)
              out[j] = c[j] < 0.0f ? 0.0f : (c[j] > 1.0f ? 1.0f : c[j]);
-@@ -2220,12 +2339,60 @@ static int rc_stage_fetch(int st, const float c[4], float out[4])
+@@ -2220,12 +2356,60 @@ static int rc_stage_fetch(int st, const float c[4], float out[4])
                  return 0;
          }
          return 1;
@@ -1312,7 +1409,7 @@ index 1280565..42a1170 100644
  }
  
  /* The fixed-function fog unit, per vertex, from the program's oFog.x
-@@ -2321,7 +2488,9 @@ static void xf_rows(const XfTri *T, int y0, int step, XfCount *cnt)
+@@ -2321,7 +2505,9 @@ static void xf_rows(const XfTri *T, int y0, int step, XfCount *cnt)
                      pw = l0 * T->iw[0] + l1 * T->iw[1] + l2 * T->iw[2];
                      if (T->use_rc) {
                          float d1[4], fog[4], t[4][4], out[4], tc[4];
@@ -1322,7 +1419,7 @@ index 1280565..42a1170 100644
                          for (k = 0; k < 4; k++)
                              d1[k] = l0 * va->d1[k] + l1 * vb->d1[k] + l2 * vc->d1[k];
                          fog[0] = T->fogc[0]; fog[1] = T->fogc[1]; fog[2] = T->fogc[2];
-@@ -2335,7 +2504,8 @@ static void xf_rows(const XfTri *T, int y0, int step, XfCount *cnt)
+@@ -2335,7 +2521,8 @@ static void xf_rows(const XfTri *T, int y0, int step, XfCount *cnt)
                              for (j = 0; j < 4; j++)
                                  tc[j] = (l0 * T->stc[0][st][j] + l1 * T->stc[1][st][j]
                                         + l2 * T->stc[2][st][j]) / pw;
@@ -1332,7 +1429,7 @@ index 1280565..42a1170 100644
                          }
                          if (!keep)
                              continue;
-@@ -2395,6 +2565,7 @@ static struct {
+@@ -2395,6 +2582,7 @@ static struct {
      volatile LONG pending;
      const XfTri *tri;
      XfCount cnt[NV_RASTER_MAX_THREADS];
@@ -1340,7 +1437,7 @@ index 1280565..42a1170 100644
  } s_pool;
  
  static DWORD WINAPI raster_worker(LPVOID arg)
-@@ -2402,6 +2573,12 @@ static DWORD WINAPI raster_worker(LPVOID arg)
+@@ -2402,6 +2590,12 @@ static DWORD WINAPI raster_worker(LPVOID arg)
      int k = (int)(intptr_t)arg;
      for (;;) {
          WaitForSingleObject(s_pool.start[k], INFINITE);
@@ -1353,7 +1450,7 @@ index 1280565..42a1170 100644
          memset(&s_pool.cnt[k], 0, sizeof s_pool.cnt[k]);
          xf_rows(s_pool.tri, s_pool.tri->miny + k, s_pool.n, &s_pool.cnt[k]);
          if (InterlockedDecrement(&s_pool.pending) == 0)
-@@ -2435,6 +2612,24 @@ static int raster_pool_size(void)
+@@ -2435,6 +2629,24 @@ static int raster_pool_size(void)
      return s_pool.n;
  }
  
@@ -1378,7 +1475,7 @@ index 1280565..42a1170 100644
  static void xf_rows_parallel(const XfTri *T, XfCount *total)
  {
      int n = raster_pool_size(), k;
-@@ -2463,9 +2658,142 @@ static void xf_rows_parallel(const XfTri *T, XfCount *total)
+@@ -2463,9 +2675,142 @@ static void xf_rows_parallel(const XfTri *T, XfCount *total)
      }
  }
  #else
@@ -1522,7 +1619,7 @@ index 1280565..42a1170 100644
  }
  #endif
  
-@@ -2684,8 +3012,21 @@ static int transform_vertex(uint32_t index, Nv2aVshOutput *out)
+@@ -2684,8 +3029,21 @@ static int transform_vertex(uint32_t index, Nv2aVshOutput *out)
  
      if (!batch_uses_program())
          return ffp_vertex(index, out);
@@ -1546,7 +1643,7 @@ index 1280565..42a1170 100644
      if (!nv2a_vsh_run((const float (*)[4])in, out))
          return 0;
      /* oPos.w == 0 comes from a program that never divided by w: x, y and z
-@@ -2721,15 +3062,84 @@ static void xf_set_viewport(void)
+@@ -2721,15 +3079,273 @@ static void xf_set_viewport(void)
      s_xf_o[2] = of[2];
  }
  
@@ -1578,9 +1675,196 @@ index 1280565..42a1170 100644
 +        transform_vertex(s_gpu.idx[s_vmiss[j]], &s_xf[s_vmiss[j]]);
 +}
 +
++/* A program batch handed to a back end that runs vertex programs on the GPU
++ * (Nv2aBackend.draw_program): the executor only gathers the vertex range,
++ * the indices as a triangle list and the program. In a race that is ~160 000
++ * program runs a frame the NV2A thread no longer makes (and the clipping,
++ * conversion and copying of every triangle corner): the CPU path held the
++ * game at 13-15 fps. Not for programs that write constants (CXT_WRITE: a
++ * vertex then depends on the ones before it), nor for index ranges much
++ * wider than the batch. RECOMP_VSH_CPU=1 keeps every batch on the CPU. */
++static uint32_t s_pidx[NV_MAX_INDICES * 3];
++static uint32_t s_pprog[NV2A_VSH_SLOTS][4], s_pprog_len, s_pprog_gen;
++
++static int backend_program_batch(void)
++{
++    static int cpu_only = -1;
++    static BackendState S;
++    static Nv2aProgramBatch pb;
++    const uint8_t *mem;
++    const uint32_t *idx = s_gpu.idx;
++    uint32_t n = s_gpu.idx_count, lo, hi, i, k = 0, a, gen;
++
++    if (cpu_only < 0)
++        cpu_only = getenv("RECOMP_VSH_CPU") != NULL;
++    if (cpu_only || !s_backend || !s_backend->draw_program || !batch_uses_program()
++            || nv2a_vsh_cxt_write_enabled() || n < 3)
++        return 0;
++    lo = hi = idx[0];
++    for (i = 1; i < n; i++) {
++        if (idx[i] < lo) lo = idx[i];
++        if (idx[i] > hi) hi = idx[i];
++    }
++    if (hi - lo >= NV_MAX_INDICES || hi - lo > 4 * n + 4096)
++        return 0;
++
++    switch (s_gpu.prim) {
++    case NV_PRIM_TRIANGLES:
++        for (i = 0; i + 2 < n; i += 3) {
++            s_pidx[k++] = idx[i] - lo; s_pidx[k++] = idx[i + 1] - lo;
++            s_pidx[k++] = idx[i + 2] - lo;
++        }
++        break;
++    case NV_PRIM_TRIANGLE_STRIP:          /* as the CPU path: no winding swap */
++        for (i = 0; i + 2 < n; i++) {
++            s_pidx[k++] = idx[i] - lo; s_pidx[k++] = idx[i + 1] - lo;
++            s_pidx[k++] = idx[i + 2] - lo;
++        }
++        break;
++    case NV_PRIM_TRIANGLE_FAN:
++    case NV_PRIM_POLYGON:
++        for (i = 1; i + 1 < n; i++) {
++            s_pidx[k++] = idx[0] - lo; s_pidx[k++] = idx[i] - lo;
++            s_pidx[k++] = idx[i + 1] - lo;
++        }
++        break;
++    case NV_PRIM_QUADS:
++        for (i = 0; i + 3 < n; i += 4) {
++            s_pidx[k++] = idx[i] - lo;     s_pidx[k++] = idx[i + 1] - lo;
++            s_pidx[k++] = idx[i + 2] - lo; s_pidx[k++] = idx[i] - lo;
++            s_pidx[k++] = idx[i + 2] - lo; s_pidx[k++] = idx[i + 3] - lo;
++        }
++        break;
++    case NV_PRIM_QUAD_STRIP:
++        for (i = 0; i + 3 < n; i += 2) {
++            s_pidx[k++] = idx[i] - lo;     s_pidx[k++] = idx[i + 1] - lo;
++            s_pidx[k++] = idx[i + 3] - lo; s_pidx[k++] = idx[i] - lo;
++            s_pidx[k++] = idx[i + 3] - lo; s_pidx[k++] = idx[i + 2] - lo;
++        }
++        break;
++    default:
++        return 0;                         /* points and lines: not drawn yet */
++    }
++    if (!k)
++        return 0;
++
++    gen = nv2a_vsh_program_gen();
++    if (gen != s_pprog_gen || !s_pprog_len) {
++        s_pprog_len = nv2a_vsh_export(s_pprog, NV2A_VSH_SLOTS);
++        s_pprog_gen = gen;
++    }
++    if (!s_pprog_len)
++        return 0;
++
++    mem = (const uint8_t *)xbox_GetMemoryOffset();
++    for (a = 0; a < NV_VERTEX_ATTRS; a++) {
++        const VertexAttr *at = &s_gpu.attr[a];
++        Nv2aProgramAttr *o = &pb.attr[a];
++        memcpy(pb.imm[a], s_gpu.imm_attr[a], sizeof pb.imm[a]);
++        o->data = NULL;
++        o->bytes = 0;
++        o->type = at->type;
++        o->size = at->size;
++        o->stride = at->stride;
++        if (!at->size || !at->stride)
++            continue;
++        {
++            uint64_t first = (uint64_t)lo * at->stride;
++            uint64_t span = (uint64_t)(hi - lo) * at->stride + attr_elem_bytes(at);
++            if (s_gpu.inline_active) {
++                if (at->offset + first + span > (uint64_t)s_gpu.inline_count * 4)
++                    return 0;
++                o->data = (const uint8_t *)s_gpu.inline_buf + at->offset + first;
++            } else {
++                if (!at->offset || !guest_span_ok(at->offset + first, (uint32_t)span))
++                    return 0;               /* the CPU path reads (0,0,0,1) there */
++                o->data = mem + at->offset + first;
++            }
++            o->bytes = (uint32_t)span;
++        }
++    }
++    pb.program = (const uint32_t (*)[4])s_pprog;
++    pb.program_len = s_pprog_len;
++    pb.program_gen = s_pprog_gen;
++    pb.constants = nv2a_vsh_constants();
++    pb.constants_gen = nv2a_vsh_constants_gen();
++    pb.indices = s_pidx;
++    pb.index_count = k;
++    pb.vertex_count = hi - lo + 1;
++    pb.aa_scale[0] = s_gpu.aa_sx;
++    pb.aa_scale[1] = s_gpu.aa_sy;
++    if (tex_size_from_format(s_gpu.texs[0].color)) {
++        pb.uv_scale[0] = (float)s_gpu.texs[0].width;
++        pb.uv_scale[1] = (float)s_gpu.texs[0].height;
++    } else {
++        pb.uv_scale[0] = pb.uv_scale[1] = 1.0f;
++    }
++    pb.fog_enable = s_gpu.fog_enable;
++    pb.fog_mode = s_gpu.fog_mode;
++    pb.fog_param[0] = s_gpu.fog_param[0];
++    pb.fog_param[1] = s_gpu.fog_param[1];
++
++    backend_state(&S, 1, 1);
++    if (!s_backend->draw_program(&S.surf, &S.batch, &pb))
++        return 0;
++    s_gpu.batches_program++;
++    s_gpu.verts_program += n;
++    s_gpu.tris_drawn += k / 3;
++    note_drawn();
++    return 1;
++}
++
++/* RECOMP_VXF_STATS=1: every 5 s, batches by size and the wall time spent
++ * transforming them (serial vs on the pool). */
++static void vxf_stats(uint32_t n, uint32_t runs, int parallel, double ms)
++{
++    static int on = -1;
++    static uint32_t b_small, b_mid, b_big, runs_ser, runs_par, last;
++    static double ms_ser, ms_par;
++    uint32_t now;
++
++    if (on < 0)
++        on = getenv("RECOMP_VXF_STATS") != NULL;
++    if (!on)
++        return;
++    if (n < 32) b_small++; else if (n < 256) b_mid++; else b_big++;
++    if (parallel) { runs_par += runs; ms_par += ms; }
++    else          { runs_ser += runs; ms_ser += ms; }
++    now = GetTickCount();
++    if (!last) last = now;
++    if (now - last >= 5000) {
++        fprintf(stderr, "  [VXF] batches <32 %u, <256 %u, big %u | serial %u runs %.0f ms,"
++                        " pool %u runs %.0f ms /5s\n",
++                b_small, b_mid, b_big, runs_ser, ms_ser, runs_par, ms_par);
++        b_small = b_mid = b_big = runs_ser = runs_par = 0;
++        ms_ser = ms_par = 0;
++        last = now;
++    }
++}
++
++static double vxf_now_ms(void)
++{
++#ifdef _WIN32
++    LARGE_INTEGER c, f;
++    QueryPerformanceCounter(&c);
++    QueryPerformanceFrequency(&f);
++    return (double)c.QuadPart * 1000.0 / (double)f.QuadPart;
++#else
++    struct timespec ts;
++    clock_gettime(CLOCK_MONOTONIC, &ts);
++    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
++#endif
++}
++
  static void raster_batch_program(void)
  {
-     uint32_t i, n = s_gpu.idx_count;
+-    uint32_t i, n = s_gpu.idx_count;
++    uint32_t i, n = s_gpu.idx_count, runs = 0;
++    double t0;
++
++    if (backend_program_batch())
++        return;
++    t0 = vxf_now_ms();
 +    int cache = !nv2a_vsh_cxt_write_enabled(), parallel = 0;
  
      if (!s_xf && !(s_xf = (Nv2aVshOutput *)calloc(NV_MAX_INDICES, sizeof *s_xf)))
@@ -1617,6 +1901,7 @@ index 1280565..42a1170 100644
 +            if (s_vref[i] != i)
 +                s_xf[i] = s_xf[s_vref[i]];
 +        parallel = 1;                       /* done: skip the serial loop */
++        runs = s_nmiss + 1;
 +    }
 +    for (i = 0; i < n && !parallel; i++) {
 +        uint32_t ix = s_gpu.idx[i], slot = ix & (NV_VCACHE_SIZE - 1);
@@ -1626,14 +1911,16 @@ index 1280565..42a1170 100644
 +        }
 +        if (!transform_vertex(ix, &s_xf[i]))
              return;                                    /* no program loaded */
++        runs++;
 +        s_vc_gen[slot] = s_vc_cur;
 +        s_vc_idx[slot] = ix;
 +        s_vc_pos[slot] = i;
 +    }
++    vxf_stats(n, runs, parallel, vxf_now_ms() - t0);
      xf_set_viewport();
      {
          const VertexAttr *tc = texcoord_attr();
-@@ -2781,13 +3191,20 @@ static void raster_batch_program(void)
+@@ -2781,13 +3397,20 @@ static void raster_batch_program(void)
          /* RECOMP_VSH_TRACE=<n>: print n program batches -- attribute setup,
           * raw inputs, key constants, and what came out. */
          static int left = -1;
@@ -1657,7 +1944,7 @@ index 1280565..42a1170 100644
              float in[4];
              left--;
              fprintf(stderr, "[VTRACE] prim %u n %u idx %u %u %u\n", s_gpu.prim,
-@@ -3509,6 +3926,11 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
+@@ -3509,6 +4132,11 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
              fprintf(stderr, "[FTRACE]   m %u:%04X = %08X%c", subch, method,
                      param, 10);
      }
@@ -1669,7 +1956,7 @@ index 1280565..42a1170 100644
      if (subch == 0 && method >= NV_TEX_FIRST && method <= NV_TEX_LAST) {
          tex_stage_method(method, param);
          return;
-@@ -3602,6 +4024,8 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
+@@ -3602,6 +4230,8 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
          s_gpu.rc_seen = 1;
          break;
      case 0x1E70: s_gpu.rc.stage_program = param; break;
@@ -1678,7 +1965,7 @@ index 1280565..42a1170 100644
      case 0x17F8: s_gpu.clip_plane_mode = param; break;
  
      /* Alpha test and fog. */
-@@ -3711,6 +4135,13 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
+@@ -3711,6 +4341,13 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
          }
          break;
  
@@ -1692,7 +1979,7 @@ index 1280565..42a1170 100644
      case 0x1808:                            /* ARRAY_ELEMENT32: one index */
          if (s_gpu.prim && s_gpu.idx_count < NV_MAX_INDICES)
              s_gpu.idx[s_gpu.idx_count++] = param;
-@@ -3745,7 +4176,31 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
+@@ -3745,7 +4382,31 @@ void nv2a_pb_exec_method(uint32_t subch, uint32_t method, uint32_t param)
              fprintf(stderr, "[FTRACE] FLIP_STALL presenting %08X (color now %08X)%c",
                      s_gpu.drawn_offset, s_gpu.color_offset, 10);
          /* The stall ends when the buffer being read is the one just finished.
@@ -1725,7 +2012,7 @@ index 1280565..42a1170 100644
          s_gpu.flip_read = s_gpu.flip_write;
          /* And this is a completed swap, which is what a title's own swap
           * counter counts -- see xbox_Nv2aFrameCounterFlip. */
-@@ -4087,10 +4542,15 @@ void nv2a_pb_exec_report(void)
+@@ -4087,10 +4748,15 @@ void nv2a_pb_exec_report(void)
      int i, j;
  
      {
@@ -1744,7 +2031,7 @@ index 1280565..42a1170 100644
              fprintf(stderr, "[GPU] %.2f fps (%u flips)%c",
                      (s_gpu.flips - last_flips) * 1000.0 / (now - last_ms),
 diff --git a/src/kernel/nv2a_pb_scan.c b/src/kernel/nv2a_pb_scan.c
-index 0f3ba51..611e8f7 100644
+index 0f3ba51..c1a8c48 100644
 --- a/src/kernel/nv2a_pb_scan.c
 +++ b/src/kernel/nv2a_pb_scan.c
 @@ -456,16 +456,56 @@ int nv2a_pb_dma_walk(void)
@@ -1806,7 +2093,7 @@ index 0f3ba51..611e8f7 100644
      while (va < end_va && words < 0x100000u) {
          uint32_t w = *(const uint32_t *)(mem + va);
          va += 4;
-@@ -474,21 +514,46 @@ static uint32_t pb_walk_segment(uint32_t va, uint32_t end_va, int in_call,
+@@ -474,21 +514,59 @@ static uint32_t pb_walk_segment(uint32_t va, uint32_t end_va, int in_call,
          if ((w & 3u) == 1u || (w & 0xE0000003u) == 0x20000000u) {
              uint32_t target = (w & 3u) == 1u ? (w & 0xFFFFFFFCu)
                                               : (w & 0x1FFFFFFCu);
@@ -1837,8 +2124,21 @@ index 0f3ba51..611e8f7 100644
 +                if (pb_seglog())
 +                    fprintf(stderr, "[SEG]   runpb %08X from %08X back to %08X\n",
 +                            tva, va - 4, s_pb_ret);
-+                if (s_pb_ret < va || s_pb_ret > end_va)
++                if (s_pb_ret < va || s_pb_ret > end_va) {
++                    static unsigned lost;
++                    if (lost++ < 20 || pb_seglog())
++                        fprintf(stderr, "[SEG] runpb %08X from %08X returns to %08X, outside"
++                                        " the segment (..%08X): rest dropped (%u)\n",
++                                tva, va - 4, s_pb_ret, end_va, lost);
 +                    break;
++                }
++                if (s_pb_ret != va) {
++                    static unsigned skipped;
++                    if (skipped++ < 30 || pb_seglog())
++                        fprintf(stderr, "[SEG] runpb %08X from %08X returns to %08X: %d bytes"
++                                        " skipped (%u)\n", tva, va - 4, s_pb_ret,
++                                (int)(s_pb_ret - va), skipped);
++                }
 +                va = s_pb_ret;
 +                continue;
 +            }
@@ -1860,7 +2160,7 @@ index 0f3ba51..611e8f7 100644
                  s_tot_calls++;
                  words += pb_walk_segment(sub, sub + 0x400000u, 1, jumps, unknown);
              }
-@@ -503,9 +568,20 @@ static uint32_t pb_walk_segment(uint32_t va, uint32_t end_va, int in_call,
+@@ -503,9 +581,20 @@ static uint32_t pb_walk_segment(uint32_t va, uint32_t end_va, int in_call,
              for (uint32_t i = 0; i < count && va < end_va; i++) {
                  uint32_t m = noninc ? method : method + i * 4;
                  note(subch, m);
@@ -1882,7 +2182,7 @@ index 0f3ba51..611e8f7 100644
                  va += 4;
                  words++;
              }
-@@ -525,6 +601,8 @@ void nv2a_pb_scan_segment(uint32_t start_va, uint32_t end_va)
+@@ -525,6 +614,8 @@ void nv2a_pb_scan_segment(uint32_t start_va, uint32_t end_va)
      if (end_va - start_va > 0x400000u)        /* a sane single-frame bound */
          end_va = start_va + 0x400000u;
  
@@ -1892,11 +2192,15 @@ index 0f3ba51..611e8f7 100644
  
      s_tot_words += words;
 diff --git a/src/kernel/nv2a_vsh_interp.c b/src/kernel/nv2a_vsh_interp.c
-index c3fba75..9764b13 100644
+index c3fba75..86d463b 100644
 --- a/src/kernel/nv2a_vsh_interp.c
 +++ b/src/kernel/nv2a_vsh_interp.c
-@@ -41,6 +41,26 @@ static uint32_t s_const_load, s_const_word;
+@@ -39,8 +39,30 @@ static float    s_const[NV2A_VSH_CONSTANTS][4];
+ static uint32_t s_load_slot, s_load_word, s_start_slot;
+ static uint32_t s_const_load, s_const_word;
  static uint32_t s_cxt_write;
++/* Bumped on every change, so a GPU back end re-uploads only what changed. */
++static uint32_t s_prog_gen = 1, s_const_gen = 1;
  static int      s_const_trace = -1;      /* RECOMP_VSH_DUMP: constant traffic */
  
 +/* The program from the start slot to its FINAL instruction, with every field
@@ -1922,11 +2226,12 @@ index c3fba75..9764b13 100644
  static int vsh_dump_enabled(void)
  {
      if (s_const_trace < 0)
-@@ -65,14 +85,21 @@ void nv2a_vsh_program_word(uint32_t word)
+@@ -65,14 +87,24 @@ void nv2a_vsh_program_word(uint32_t word)
  {
      if (s_load_slot < NV2A_VSH_SLOTS)
          s_program[s_load_slot][s_load_word] = word;
 +    s_decoded_ok = 0;
++    s_prog_gen++;
      if (++s_load_word == 4) {
          s_load_word = 0;
          s_load_slot++;
@@ -1936,8 +2241,10 @@ index c3fba75..9764b13 100644
 -void nv2a_vsh_set_start_slot(uint32_t slot) { s_start_slot = slot; }
 +void nv2a_vsh_set_start_slot(uint32_t slot)
 +{
-+    if (slot != s_start_slot)
++    if (slot != s_start_slot) {
 +        s_decoded_ok = 0;
++        s_prog_gen++;
++    }
 +    s_start_slot = slot;
 +}
  void nv2a_vsh_set_cxt_write(uint32_t enable) { s_cxt_write = enable; }
@@ -1945,15 +2252,43 @@ index c3fba75..9764b13 100644
  
  void nv2a_vsh_set_constant_load(uint32_t index)
  {
-@@ -116,6 +143,7 @@ void nv2a_vsh_set_instruction(uint32_t slot, const uint32_t words[4])
+@@ -84,9 +116,10 @@ void nv2a_vsh_set_constant_load(uint32_t index)
+ 
+ void nv2a_vsh_constant_word(uint32_t word)
+ {
+-    if (s_const_load < NV2A_VSH_CONSTANTS)
++    if (s_const_load < NV2A_VSH_CONSTANTS) {
+         memcpy(&s_const[s_const_load][s_const_word], &word, 4);
+-    else if (vsh_dump_enabled()) {
++        s_const_gen++;
++    } else if (vsh_dump_enabled()) {
+         static int warned;
+         if (warned++ < 8)
+             fprintf(stderr, "  [VSH] constant write DROPPED (c[%u] >= %u)\n",
+@@ -110,12 +143,15 @@ void nv2a_vsh_set_constant(uint32_t index, const float v[4])
+ {
+     if (index < NV2A_VSH_CONSTANTS)
+         memcpy(s_const[index], v, sizeof s_const[index]);
++    s_const_gen++;
+ }
+ 
+ void nv2a_vsh_set_instruction(uint32_t slot, const uint32_t words[4])
  {
      if (slot < NV2A_VSH_SLOTS)
          memcpy(s_program[slot], words, sizeof s_program[slot]);
 +    s_decoded_ok = 0;
++    s_prog_gen++;
  }
  
  /* ---- disassembly (RECOMP_VSH_DUMP) --------------------------------------- */
-@@ -198,43 +226,86 @@ void nv2a_vsh_constant_component(uint32_t index, uint32_t comp, uint32_t word)
+@@ -192,49 +228,93 @@ void nv2a_vsh_constant_component(uint32_t index, uint32_t comp, uint32_t word)
+ {
+     if (index < NV2A_VSH_CONSTANTS && comp < 4)
+         memcpy(&s_const[index][comp], &word, 4);
++    s_const_gen++;
+ }
+ 
+ /* ---- execution ----------------------------------------------------------- */
  
  typedef struct { float v[4]; } vec4;
  
@@ -2064,7 +2399,7 @@ index c3fba75..9764b13 100644
          r.v[0] = -r.v[0]; r.v[1] = -r.v[1];
          r.v[2] = -r.v[2]; r.v[3] = -r.v[3];
      }
-@@ -368,27 +439,30 @@ int nv2a_vsh_run(const float in[NV2A_VSH_INPUTS][4], Nv2aVshOutput *out)
+@@ -368,27 +448,30 @@ int nv2a_vsh_run(const float in[NV2A_VSH_INPUTS][4], Nv2aVshOutput *out)
       * unwritten stage at infinity. */
      outregs[9][3] = outregs[10][3] = outregs[11][3] = outregs[12][3] = 1.0f;
  
@@ -2108,7 +2443,7 @@ index c3fba75..9764b13 100644
              /* Paired with any MAC op, the ILU can only write R1 -- even when
               * the MAC half writes no temp at all. The D3D epilogue is exactly
               * that: `mul o[0].xyz` beside `rcc R1.x`, then `mad` with R1.x.
-@@ -396,11 +470,11 @@ int nv2a_vsh_run(const float in[NV2A_VSH_INPUTS][4], Nv2aVshOutput *out)
+@@ -396,30 +479,69 @@ int nv2a_vsh_run(const float in[NV2A_VSH_INPUTS][4], Nv2aVshOutput *out)
               * put every vertex of every 3D batch at c[59]. */
              uint32_t it = mac ? 1u : tdst;
              float *d = it == 12 ? opos.v : (it < 12 ? temp[it].v : NULL);
@@ -2118,12 +2453,16 @@ index c3fba75..9764b13 100644
          if (omask) {
 -            const vec4 *src = field(ins, 3, 2, 1) ? &ires : &mres;
 -            if (!field(ins, 3, 11, 1)) {                  /* to c[] */
+-                if (s_cxt_write && oaddr < NV2A_VSH_CONSTANTS)
 +            const vec4 *src = ins->out_ilu ? &ires : &mres;
 +            if (!ins->out_o) {                            /* to c[] */
-                 if (s_cxt_write && oaddr < NV2A_VSH_CONSTANTS)
++                if (s_cxt_write && oaddr < NV2A_VSH_CONSTANTS) {
                      write_masked(s_const[oaddr], src, omask);
++                    s_const_gen++;
++                }
              } else if (oaddr == 0) {
-@@ -409,17 +483,17 @@ int nv2a_vsh_run(const float in[NV2A_VSH_INPUTS][4], Nv2aVshOutput *out)
+                 write_masked(opos.v, src, omask);
+             } else if (oaddr < 13) {
                  write_masked(outregs[oaddr], src, omask);
              }
          }
@@ -2152,8 +2491,45 @@ index c3fba75..9764b13 100644
      }
      return 0;
  }
++
++/* ---- export for a GPU back end ------------------------------------------- */
++
++uint32_t nv2a_vsh_program_gen(void)  { return s_prog_gen; }
++uint32_t nv2a_vsh_constants_gen(void) { return s_const_gen; }
++const float (*nv2a_vsh_constants(void))[4] { return (const float (*)[4])s_const; }
++
++/* The decoded program packed four words per instruction (layout in
++ * nv2a_vsh_interp.h). The fields are the ones nv2a_vsh_run reads, so the
++ * GPU runs exactly what the interpreter would. */
++static uint32_t pack_src(const VshSrc *d)
++{
++    return (uint32_t)d->neg | (uint32_t)d->mux << 1 | (uint32_t)d->reg << 3
++         | (uint32_t)d->rel << 7 | (uint32_t)d->sw[0] << 8 | (uint32_t)d->sw[1] << 10
++         | (uint32_t)d->sw[2] << 12 | (uint32_t)d->sw[3] << 14
++         | (uint32_t)(d->index & 0xFF) << 16;
++}
++
++uint32_t nv2a_vsh_export(uint32_t out[][4], uint32_t max)
++{
++    uint32_t s;
++
++    if (!s_decoded_ok)
++        decode_program();
++    for (s = 0; s < s_ndecoded && s < max; s++) {
++        const VshIns *d = &s_decoded[s];
++        out[s][0] = (uint32_t)d->mac | (uint32_t)d->ilu << 4 | (uint32_t)d->mac_mask << 7
++                  | (uint32_t)d->ilu_mask << 11 | (uint32_t)d->tdst << 15
++                  | (uint32_t)d->omask << 19 | (uint32_t)d->out_ilu << 23
++                  | (uint32_t)d->out_o << 24 | (uint32_t)d->uses[0] << 25
++                  | (uint32_t)d->uses[1] << 26 | (uint32_t)d->uses[2] << 27;
++        out[s][1] = pack_src(&d->src[0]) | (uint32_t)d->oaddr << 24;
++        out[s][2] = pack_src(&d->src[1]);
++        out[s][3] = pack_src(&d->src[2]);
++    }
++    return s_ndecoded <= max ? s_ndecoded : 0;
++}
 diff --git a/src/kernel/nv2a_vsh_interp.h b/src/kernel/nv2a_vsh_interp.h
-index 8acb0af..c7a266b 100644
+index 8acb0af..bb98b6e 100644
 --- a/src/kernel/nv2a_vsh_interp.h
 +++ b/src/kernel/nv2a_vsh_interp.h
 @@ -43,6 +43,7 @@ void nv2a_vsh_set_start_slot(uint32_t slot);          /* _PROGRAM_START     */
@@ -2164,6 +2540,25 @@ index 8acb0af..c7a266b 100644
  
  /* Run the program from the start slot on one vertex. Inputs are the ten
   * attribute values as floats. Returns 0 if there is no program to run (no
+@@ -58,4 +59,18 @@ const float *nv2a_vsh_constant(uint32_t index);   /* for traces */
+ void nv2a_vsh_constant_component(uint32_t index, uint32_t comp, uint32_t word);
+ void nv2a_vsh_set_instruction(uint32_t slot, const uint32_t words[4]);
+ 
++/* For a back end that runs programs on the GPU. The generations change
++ * whenever the program or any constant does. nv2a_vsh_export writes the
++ * decoded program, four words per instruction, and returns its length (0:
++ * no program, or longer than max):
++ *   w0: mac 0-3, ilu 4-6, mac_mask 7-10, ilu_mask 11-14, tdst 15-18,
++ *       omask 19-22, out_ilu 23, out_o 24, uses a/b/c 25-27
++ *   w1..w3: sources a, b, c -- neg 0, mux 1-2, reg 3-6, rel 7,
++ *       swizzle x/y/z/w 8-15 (2 bits each), index 16-23; w1 also oaddr 24-31
++ * Masks are xyzw = bits 3..0, as in the instruction. */
++uint32_t nv2a_vsh_program_gen(void);
++uint32_t nv2a_vsh_constants_gen(void);
++const float (*nv2a_vsh_constants(void))[4];
++uint32_t nv2a_vsh_export(uint32_t out[][4], uint32_t max);
++
+ #endif
 diff --git a/src/kernel/xbox_memory_layout.c b/src/kernel/xbox_memory_layout.c
 index 362cefe..906115e 100644
 --- a/src/kernel/xbox_memory_layout.c

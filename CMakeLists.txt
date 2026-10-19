@@ -133,7 +133,7 @@ if(AMPED2_VULKAN AND NOT WIN32)
     find_program(AMPED2_GLSLC glslc REQUIRED)
     set(AMPED2_SHADER_OUT ${CMAKE_CURRENT_BINARY_DIR}/shaders)
     set(AMPED2_SHADER_INCS)
-    foreach(sh nv2a.vert nv2a.frag)
+    foreach(sh nv2a.vert nv2a.frag nv2a_vsh.vert)
         add_custom_command(
             OUTPUT  ${AMPED2_SHADER_OUT}/${sh}.inc
             COMMAND ${CMAKE_COMMAND} -E make_directory ${AMPED2_SHADER_OUT}

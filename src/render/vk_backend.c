@@ -42,12 +42,16 @@ static const uint32_t k_vert_spv[] =
 static const uint32_t k_frag_spv[] =
 #include "nv2a.frag.inc"
 ;
+static const uint32_t k_vsh_spv[] =
+#include "nv2a_vsh.vert.inc"
+;
 #include "keyboard_sdl.h"     /* xboxrecomp/src/input */
 #include "vk_backend.h"
 
 #define VKB_MAX_SURFACES    16
 #define VKB_MAX_SWAP_IMAGES 8
 #define VKB_MAX_TEXTURES    512
+#define VKB_MAX_BAD_TEXTURES 16
 #define VKB_MAX_SAMPLERS    32
 #define VKB_VERTEX_RING     (32u << 20)    /* vertex bytes per frame */
 #define VKB_STAGING_RING    (64u << 20)    /* texture upload bytes per frame */
@@ -90,11 +94,18 @@ typedef struct {
 } VkbTexture;
 
 /* Host-visible buffer used as a per-frame bump allocator. */
+/* A texture that failed to decode, remembered for the rest of the frame. */
+typedef struct {
+    uint32_t       offset, width, height, color, flip;
+} VkbBadTexture;
+
 typedef struct {
     VkBuffer       buffer;
     VkDeviceMemory memory;
     uint8_t       *mapped;
     VkDeviceSize   size, used;
+    VkDeviceSize   wanted;         /* bytes asked for this frame, refused ones too */
+    VkBufferUsageFlags usage;
 } VkbRing;
 
 /* Push constants shared by both shaders (layout matches nv2a.vert/.frag). */
@@ -123,6 +134,21 @@ typedef struct {
 #define VKB_BIND_RC   4
 #define VKB_BIND_CUBE 5
 #define VKB_NBIND     9
+/* ... and for batches whose vertex program runs on the GPU (nv2a_vsh.vert):
+ * its constants, the program, the attribute formats (UBOs) and the vertex
+ * bytes (SSBO). */
+#define VKB_BIND_VCONST 9
+#define VKB_BIND_VPROG  10
+#define VKB_BIND_VATTR  11
+#define VKB_BIND_VDATA  12
+#define VKB_NBIND_VSH   13
+
+/* nv2a_vsh.vert's Attrs block, std140. */
+typedef struct {
+    uint32_t fmt[16][4];     /* byte offset into the vertex bytes, stride, type, size (0: imm) */
+    float    imm[16][4];
+    float    misc[3][4];     /* aa xy, uv scale zw | fog p0, p1, enable, mode | program length */
+} VkbVshAttrs;
 
 static struct {
     int               failed;              /* init failed: stay inert */
@@ -159,6 +185,14 @@ static struct {
     VkDescriptorSetLayout set_layout;
     VkPipelineLayout  pipe_layout;
     VkPipeline        pipeline;
+    VkPipeline        pipeline_vsh;        /* vertex programs on the GPU; NULL: CPU only */
+    VkPipeline        bound;               /* bound in V.cmd (NULL after a new scope) */
+    VkDeviceSize      ssbo_align;          /* minStorageBufferOffsetAlignment */
+    uint32_t          frame_serial;        /* command buffers begun */
+    uint32_t          vconst_gen, vconst_serial;   /* constants already in vring ... */
+    VkDeviceSize      vconst_off;              /* ... at this offset */
+    uint32_t          vprog_gen, vprog_serial;
+    VkDeviceSize      vprog_off;
     VkSampler         samplers[VKB_MAX_SAMPLERS];
     uint32_t          sampler_keys[VKB_MAX_SAMPLERS];
     uint32_t          nsamplers;
@@ -168,6 +202,8 @@ static struct {
     VkDeviceSize      last_rc_off;         /* ... and where (~0: none yet) */
     VkbDepth          depths[VKB_MAX_SURFACES];
     VkbTexture        textures[VKB_MAX_TEXTURES];
+    VkbBadTexture     bad[VKB_MAX_BAD_TEXTURES];
+    uint32_t          nbad;
     VkbTexture        white;               /* bound when a batch is untextured */
     VkbTexture        white_cube;          /* ... and in every unused cube slot */
     uint32_t         *decode_buf;          /* decode scratch, grown on demand */
@@ -183,6 +219,8 @@ static struct {
     uint32_t          stat_decodes;        /* texture decodes since the last log */
     uint64_t          stat_decode_px;      /* ... and their texels */
     uint32_t          stat_new;            /* ... of which first sight / cache misses */
+    uint32_t          stat_hashes;         /* texture re-validations since the last log */
+    uint64_t          stat_hash_bytes;     /* ... and the guest bytes they read */
     uint32_t          last_frame_draws;
     uint32_t          title_ms, title_flips;   /* window-title FPS counter */
 
@@ -349,6 +387,9 @@ static int pick_gpu(void)
         V.ubo_align = p.limits.minUniformBufferOffsetAlignment;
         if (V.ubo_align < 16)
             V.ubo_align = 16;
+        V.ssbo_align = p.limits.minStorageBufferOffsetAlignment;
+        if (V.ssbo_align < 16)
+            V.ssbo_align = 16;
     }
     vkGetPhysicalDeviceMemoryProperties(V.gpu, &V.memprops);
     return 1;
@@ -558,6 +599,8 @@ static int ring_create(VkbRing *r, VkDeviceSize size, VkBufferUsageFlags usage)
     VK_CHECK(vkMapMemory(V.device, r->memory, 0, size, 0, (void **)&r->mapped));
     r->size = size;
     r->used = 0;
+    r->wanted = 0;
+    r->usage = usage;
     return 1;
 }
 
@@ -566,11 +609,39 @@ static void *ring_alloc(VkbRing *r, VkDeviceSize bytes, VkDeviceSize align,
                         VkDeviceSize *offset)
 {
     VkDeviceSize at = (r->used + align - 1) & ~(align - 1);
+    r->wanted = ((r->wanted + align - 1) & ~(align - 1)) + bytes;
     if (at + bytes > r->size)
         return NULL;
     r->used = at + bytes;
     *offset = at;
     return r->mapped + at;
+}
+
+/* Start a frame's slices. A ring that had to refuse allocations in the last
+ * frame (the frame's draws after that were dropped: a race's HUD, the rider's
+ * upper body and hair come late in the frame) grows first; the GPU is idle on
+ * it here (frame fence). */
+static void ring_reset(VkbRing *r, const char *what)
+{
+    if (r->wanted > r->size && r->buffer) {
+        VkDeviceSize size = r->size;
+        VkBufferUsageFlags usage = r->usage;
+        while (size < r->wanted + r->wanted / 4 && size < (VkDeviceSize)1 << 30)
+            size *= 2;
+        vkUnmapMemory(V.device, r->memory);
+        vkDestroyBuffer(V.device, r->buffer, NULL);
+        vkFreeMemory(V.device, r->memory, NULL);
+        memset(r, 0, sizeof *r);
+        if (!ring_create(r, size, usage)) {
+            fprintf(stderr, "  [VK] %s ring: %llu MB failed\n", what,
+                    (unsigned long long)(size >> 20));
+            return;
+        }
+        fprintf(stderr, "  [VK] %s ring grown to %llu MB\n", what,
+                (unsigned long long)(size >> 20));
+    }
+    r->used = 0;
+    r->wanted = 0;
 }
 
 /* A device-local 2D image with one view; with cube set, six layers and a
@@ -646,7 +717,7 @@ static VkShaderModule shader_module(const uint32_t *code, size_t bytes)
  * the attachment formats and filled polygons. */
 static int create_pipeline(void)
 {
-    VkDescriptorSetLayoutBinding bind[VKB_NBIND];
+    VkDescriptorSetLayoutBinding bind[VKB_NBIND_VSH];
     VkDescriptorSetLayoutCreateInfo dslci;
     VkPushConstantRange pcr;
     VkPipelineLayoutCreateInfo plci;
@@ -682,17 +753,20 @@ static int create_pipeline(void)
     int i;
 
     memset(bind, 0, sizeof bind);
-    for (i = 0; i < VKB_NBIND; i++) {
+    for (i = 0; i < VKB_NBIND_VSH; i++) {
         bind[i].binding = (uint32_t)i;
-        bind[i].descriptorType = i == VKB_BIND_RC ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
-                                                  : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bind[i].descriptorType = i == VKB_BIND_VDATA ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+                               : (i == VKB_BIND_RC || i >= VKB_NBIND)
+                                 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                                 : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bind[i].descriptorCount = 1;
-        bind[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        bind[i].stageFlags = i >= VKB_NBIND ? VK_SHADER_STAGE_VERTEX_BIT
+                                            : VK_SHADER_STAGE_FRAGMENT_BIT;
     }
     memset(&dslci, 0, sizeof dslci);
     dslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
     dslci.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-    dslci.bindingCount = VKB_NBIND;
+    dslci.bindingCount = VKB_NBIND_VSH;
     dslci.pBindings = bind;
     VK_CHECK(vkCreateDescriptorSetLayout(V.device, &dslci, NULL, &V.set_layout));
 
@@ -808,6 +882,23 @@ static int create_pipeline(void)
     gpci.layout = V.pipe_layout;
     VK_CHECK(vkCreateGraphicsPipelines(V.device, VK_NULL_HANDLE, 1, &gpci, NULL, &V.pipeline));
     vkDestroyShaderModule(V.device, vs, NULL);
+
+    /* The same pipeline with nv2a_vsh.vert: no vertex input (it reads the
+     * vertex bytes from binding 12 by gl_VertexIndex), so no dynamic stride.
+     * Without it every program batch takes the executor's CPU path. */
+    if (!getenv("AMPED2_VK_CPU_VSH") && (vs = shader_module(k_vsh_spv, sizeof k_vsh_spv))) {
+        VkResult r;
+        stages[0].module = vs;
+        memset(&vi, 0, sizeof vi);
+        vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        dyn.dynamicStateCount = sizeof dynamic / sizeof dynamic[0] - 1;
+        r = vkCreateGraphicsPipelines(V.device, VK_NULL_HANDLE, 1, &gpci, NULL, &V.pipeline_vsh);
+        if (r != VK_SUCCESS) {
+            fprintf(stderr, "  [VK] vertex-program pipeline failed (%d): CPU transforms\n", (int)r);
+            V.pipeline_vsh = VK_NULL_HANDLE;
+        }
+        vkDestroyShaderModule(V.device, vs, NULL);
+    }
     vkDestroyShaderModule(V.device, fs, NULL);
     return 1;
 }
@@ -850,7 +941,8 @@ static int init_vulkan(void)
     if (!pick_gpu() || !create_device() || !create_swapchain() || !create_pipeline())
         return 0;
     if (!ring_create(&V.vring, VKB_VERTEX_RING,
-                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT)
+                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT
+                     | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT)
             || !ring_create(&V.staging, VKB_STAGING_RING, VK_BUFFER_USAGE_TRANSFER_SRC_BIT))
         return 0;
 
@@ -910,9 +1002,12 @@ static int ensure_recording(void)
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     VK_CHECK(vkBeginCommandBuffer(V.cmd, &bi));
     V.recording = 1;
-    /* The previous frame has retired (fence above): its ring slices are free. */
-    V.vring.used = 0;
-    V.staging.used = 0;
+    V.bound = VK_NULL_HANDLE;
+    V.frame_serial++;
+    /* The previous frame has retired (fence above): its ring slices are free,
+     * and a ring that refused some of them can be replaced by a larger one. */
+    ring_reset(&V.vring, "vertex");
+    ring_reset(&V.staging, "staging");
     V.last_rc_off = ~(VkDeviceSize)0;
     return 1;
 }
@@ -1092,7 +1187,6 @@ static void begin_rendering(VkbSurface *c, VkbDepth *d)
     V.rt_color = c;
     V.rt_depth = d;
 
-    vkCmdBindPipeline(V.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, V.pipeline);
     vp.x = 0; vp.y = 0;
     vp.width = (float)c->width; vp.height = (float)c->height;
     vp.minDepth = 0.0f; vp.maxDepth = 1.0f;
@@ -1168,11 +1262,30 @@ static uint64_t hash_guest_texture(const Nv2aTexture *g)
         bytes = limit;
     p = mem + va;
     n = (size_t)(bytes / 8);
-    for (i = 0; i < n; i++) {
-        memcpy(&w, p + i * 8, 8);
-        h ^= w;
-        h *= 0xBF58476D1CE4E5B9ull;
-        h ^= h >> 31;
+    V.stat_hashes++;
+    V.stat_hash_bytes += bytes;
+    /* Four independent lanes: one multiply chain is latency-bound (~5 cycles
+     * per 8 bytes); a race re-validates several hundred MB of textures a
+     * second. */
+    {
+        uint64_t l[4] = { h, h ^ 0x632BE59BD9B4E019ull, h ^ 0x85EBCA77C2B2AE63ull,
+                          h ^ 0x27D4EB2F165667C5ull };
+        for (i = 0; i + 4 <= n; i += 4) {
+            int k;
+            for (k = 0; k < 4; k++) {
+                memcpy(&w, p + (i + k) * 8, 8);
+                l[k] ^= w;
+                l[k] *= 0xBF58476D1CE4E5B9ull;
+                l[k] ^= l[k] >> 31;
+            }
+        }
+        for (; i < n; i++) {
+            memcpy(&w, p + i * 8, 8);
+            l[0] ^= w;
+            l[0] *= 0xBF58476D1CE4E5B9ull;
+            l[0] ^= l[0] >> 31;
+        }
+        h = l[0] ^ (l[1] * 0x9E3779B97F4A7C15ull) ^ (l[2] >> 7) ^ (l[3] << 13) ^ l[3];
     }
     return h | 1;                              /* 0 means "never uploaded" */
 }
@@ -1300,7 +1413,17 @@ static VkImageView texture_view(const Nv2aTexture *g)
         t->last_used = V.flips;
         return t->view;
     }
-    h = hash_guest_texture(g);
+    /* A texture that failed to decode this frame fails again: a format the
+     * executor cannot decode (0x30, a depth texture in a race) was hashed and
+     * retried at every draw -- most of the NV2A thread's time. */
+    for (i = 0; i < VKB_MAX_BAD_TEXTURES; i++) {
+        VkbBadTexture *b = &V.bad[i];
+        if (b->flip == V.flips && b->offset == g->offset && b->width == g->width
+                && b->height == g->height && b->color == g->color)
+            return NULL;
+    }
+    /* Hash only what is cached: a first sight decodes anyway. */
+    h = t ? hash_guest_texture(g) : 0;
     if (t && (!h || t->hash == h)) {           /* unchanged, or unhashable: once */
         t->checked = V.flips;
         t->last_used = V.flips;
@@ -1319,8 +1442,18 @@ static VkImageView texture_view(const Nv2aTexture *g)
         Nv2aTexture face = *g;
         size_t npx = (size_t)g->width * g->height;
         face.offset = g->offset + f * cube;
-        if (!nv2a_backend_decode_texture(&face, V.decode_buf + f * npx))
+        if (!nv2a_backend_decode_texture(&face, V.decode_buf + f * npx)) {
+            VkbBadTexture *b = &V.bad[V.nbad++ % VKB_MAX_BAD_TEXTURES];
+            b->offset = g->offset; b->width = g->width; b->height = g->height;
+            b->color = g->color;   b->flip = V.flips;
+            if (getenv("AMPED2_VK_TEXLOG")) {
+                static int nfail;
+                if (nfail++ < 20)
+                    fprintf(stderr, "  [VK] cannot decode %08X %ux%u fmt %02X\n", g->offset,
+                            g->width, g->height, g->color);
+            }
             return NULL;                   /* format the executor cannot decode */
+        }
     }
     V.stat_decodes++;
     V.stat_decode_px += n;
@@ -1332,6 +1465,8 @@ static VkImageView texture_view(const Nv2aTexture *g)
                     g->offset, g->width, g->height, g->color, g->pitch,
                     (unsigned long long)h);
     }
+    if (!t)
+        h = hash_guest_texture(g);
     if (!h)
         h = 1;                             /* outside guest RAM: upload once */
 
@@ -1707,59 +1842,132 @@ static int combiners_upload(const Nv2aBatchExt *e, VkDeviceSize *off)
     return 1;
 }
 
-static void vkb_draw(const Nv2aSurface *g, const Nv2aBatch *b)
+static void bind_pipeline(VkPipeline p)
 {
-    const Nv2aRenderState *rs = b->state;
+    if (V.bound != p) {
+        vkCmdBindPipeline(V.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
+        V.bound = p;
+    }
+}
+
+/* What both draw paths share: the target, the stage textures, the combiner
+ * UBO, the fragment-stage descriptors and the push constants. */
+typedef struct {
+    VkbSurface            *s;
+    VkbDepth              *d;
+    int                    use_rc;
+    const Nv2aBatchExt    *e;
+    const Nv2aTexture     *stex[4];
+    VkImageView            views[4];
+    VkDeviceSize           rc_off;
+    VkDescriptorImageInfo  dii[8];
+    VkDescriptorBufferInfo dbi[1 + VKB_NBIND_VSH - VKB_NBIND];
+    VkWriteDescriptorSet   w[VKB_NBIND_VSH];
+    VkbPush                pc;
+} VkbDrawCtx;
+
+static int draw_prepare(const Nv2aSurface *g, const Nv2aBatch *b, VkbDrawCtx *c)
+{
     static int no_rc = -1;
-    const Nv2aBatchExt *e;
-    int use_rc;
-    VkbSurface *s;
-    VkbDepth *d;
-    const Nv2aTexture *stex[4] = { NULL, NULL, NULL, NULL };
-    VkImageView views[4] = { VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE };
-    VkDescriptorImageInfo dii[8];
-    VkDescriptorBufferInfo dbi;
-    VkWriteDescriptorSet w[VKB_NBIND];
-    VkbPush pc;
-    VkDeviceSize voff[2], vstride[2], rc_off = 0;
-    VkDeviceSize bytes = (VkDeviceSize)b->count * sizeof(Nv2aVertex);
-    VkDeviceSize ebytes;
-    VkBuffer vbufs[2];
-    void *dst, *edst;
     int i;
 
     if (no_rc < 0)
         no_rc = getenv("AMPED2_VK_NO_RC") != NULL;
-    e = no_rc ? NULL : b->ext;
-    use_rc = e && e->rc;
-    ebytes = e ? (VkDeviceSize)b->count * sizeof(Nv2aVertexExt) : sizeof(Nv2aVertexExt);
-    if (!b->count || !ensure_ready() || !ensure_recording() || !white_ready()
-            || !white_cube_ready())
-        return;
-    if (!(s = surface_get(g)))
-        return;
-    V.last = s;
+    memset(c, 0, sizeof *c);
+    c->e = no_rc ? NULL : b->ext;
+    c->use_rc = c->e && c->e->rc;
+    if (!ensure_ready() || !ensure_recording() || !white_ready() || !white_cube_ready())
+        return 0;
+    if (!(c->s = surface_get(g)))
+        return 0;
+    V.last = c->s;
     V.frame_draws++;
-    d = depth_get(rs->zeta_va, s->width, s->height);
-    if (!d)
-        return;
+    if (!(c->d = depth_get(b->state->zeta_va, c->s->width, c->s->height)))
+        return 0;
 
     /* Textures first: an upload or a render-to-texture transition ends the
      * rendering scope, which begin_rendering below reopens. With combiners
      * every stage samples what the extension names; without, stage 0 is the
      * batch's one texture. */
-    if (use_rc)
+    if (c->use_rc)
         for (i = 0; i < 4; i++)
-            stex[i] = e->textures[i];
+            c->stex[i] = c->e->textures[i];
     else
-        stex[0] = b->texture;
+        c->stex[0] = b->texture;
     for (i = 0; i < 4; i++)
-        if (stex[i])
-            views[i] = texture_view(stex[i]);
+        if (c->stex[i])
+            c->views[i] = texture_view(c->stex[i]);
+    if (c->use_rc && !combiners_upload(c->e, &c->rc_off))
+        return 0;
+    return 1;
+}
 
+/* Fragment-stage descriptors (bindings 0-8) and push constants. */
+static void draw_frag_state(const Nv2aBatch *b, VkbDrawCtx *c)
+{
+    const Nv2aRenderState *rs = b->state;
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        /* A stage with nothing usable reads white, as on the CPU path. A cube
+         * map goes to the stage's cube binding, white to its 2D one. */
+        int cube = c->views[i] && c->use_rc && tex_is_cube(c->stex[i]);
+        VkSampler smp = sampler_get(c->views[i] ? c->stex[i] : NULL);
+        int k;
+        c->dii[i].sampler = smp;
+        c->dii[i].imageView = c->views[i] && !cube ? c->views[i] : V.white.view;
+        c->dii[4 + i].sampler = smp;
+        c->dii[4 + i].imageView = cube ? c->views[i] : V.white_cube.view;
+        for (k = 0; k < 2; k++) {
+            int d = k ? VKB_BIND_CUBE + i : i, at = k ? 5 + i : i;
+            c->dii[i + 4 * k].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            c->w[at].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            c->w[at].dstBinding = (uint32_t)d;
+            c->w[at].descriptorCount = 1;
+            c->w[at].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            c->w[at].pImageInfo = &c->dii[i + 4 * k];
+        }
+    }
+    /* The UBO binding must be valid even when the shader skips it: without
+     * combiners rc_off stays 0, an in-range block it never reads. */
+    c->dbi[0].buffer = V.vring.buffer;
+    c->dbi[0].offset = c->rc_off;
+    c->dbi[0].range = sizeof(VkbCombiners);
+    c->w[VKB_BIND_RC].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    c->w[VKB_BIND_RC].dstBinding = VKB_BIND_RC;
+    c->w[VKB_BIND_RC].descriptorCount = 1;
+    c->w[VKB_BIND_RC].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    c->w[VKB_BIND_RC].pBufferInfo = &c->dbi[0];
+
+    c->pc.surface_size[0] = (float)c->s->width;
+    c->pc.surface_size[1] = (float)c->s->height;
+    c->pc.tex_size[0] = (!c->use_rc && c->views[0]) ? (float)b->texture->width : 1.0f;
+    c->pc.tex_size[1] = (!c->use_rc && c->views[0]) ? (float)b->texture->height : 1.0f;
+    c->pc.z_scale = 1.0f / 16777215.0f;
+    c->pc.flags = ((!c->use_rc && c->views[0]) ? 1u : 0u)
+                | (c->use_rc ? 2u : 0u)
+                | ((rs->alpha_func >= 0x200 && rs->alpha_func <= 0x207
+                    ? rs->alpha_func - 0x200 : 7u) << 8)
+                | ((rs->alpha_ref & 0xFF) << 16)
+                | (rs->alpha_test_enable ? 0x80000000u : 0u);
+}
+
+static void vkb_draw(const Nv2aSurface *g, const Nv2aBatch *b)
+{
+    VkbDrawCtx c;
+    VkDeviceSize voff[2], vstride[2];
+    VkDeviceSize bytes = (VkDeviceSize)b->count * sizeof(Nv2aVertex);
+    VkDeviceSize ebytes;
+    VkBuffer vbufs[2];
+    const Nv2aBatchExt *e;
+    void *dst, *edst;
+
+    if (!b->count || !draw_prepare(g, b, &c))
+        return;
+    e = c.e;
+    ebytes = e ? (VkDeviceSize)b->count * sizeof(Nv2aVertexExt) : sizeof(Nv2aVertexExt);
     if (!(dst = ring_alloc(&V.vring, bytes, 16, &voff[0]))
-            || !(edst = ring_alloc(&V.vring, ebytes, 16, &voff[1]))
-            || (use_rc && !combiners_upload(e, &rc_off))) {
+            || !(edst = ring_alloc(&V.vring, ebytes, 16, &voff[1]))) {
         static int warned;
         if (!warned++)
             fprintf(stderr, "  [VK] vertex ring full this frame\n");
@@ -1771,62 +1979,154 @@ static void vkb_draw(const Nv2aSurface *g, const Nv2aBatch *b)
     else
         memset(edst, 0, (size_t)ebytes);
 
-    begin_rendering(s, d);
-    apply_state(rs);
-
-    memset(w, 0, sizeof w);
-    for (i = 0; i < 4; i++) {
-        /* A stage with nothing usable reads white, as on the CPU path. A cube
-         * map goes to the stage's cube binding, white to its 2D one. */
-        int cube = views[i] && use_rc && tex_is_cube(stex[i]);
-        VkSampler smp = sampler_get(views[i] ? stex[i] : NULL);
-        int k;
-        dii[i].sampler = smp;
-        dii[i].imageView = views[i] && !cube ? views[i] : V.white.view;
-        dii[4 + i].sampler = smp;
-        dii[4 + i].imageView = cube ? views[i] : V.white_cube.view;
-        for (k = 0; k < 2; k++) {
-            int d = k ? VKB_BIND_CUBE + i : i, at = k ? 5 + i : i;
-            dii[i + 4 * k].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            w[at].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w[at].dstBinding = (uint32_t)d;
-            w[at].descriptorCount = 1;
-            w[at].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            w[at].pImageInfo = &dii[i + 4 * k];
-        }
-    }
-    /* The UBO binding must be valid even when the shader skips it: without
-     * combiners rc_off stays 0, an in-range block it never reads. */
-    dbi.buffer = V.vring.buffer;
-    dbi.offset = rc_off;
-    dbi.range = sizeof(VkbCombiners);
-    w[VKB_BIND_RC].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    w[VKB_BIND_RC].dstBinding = VKB_BIND_RC;
-    w[VKB_BIND_RC].descriptorCount = 1;
-    w[VKB_BIND_RC].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    w[VKB_BIND_RC].pBufferInfo = &dbi;
+    begin_rendering(c.s, c.d);
+    bind_pipeline(V.pipeline);
+    apply_state(b->state);
+    draw_frag_state(b, &c);
     vkCmdPushDescriptorSetKHR(V.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, V.pipe_layout,
-                              0, VKB_NBIND, w);
-
-    pc.surface_size[0] = (float)s->width;
-    pc.surface_size[1] = (float)s->height;
-    pc.tex_size[0] = (!use_rc && views[0]) ? (float)b->texture->width : 1.0f;
-    pc.tex_size[1] = (!use_rc && views[0]) ? (float)b->texture->height : 1.0f;
-    pc.z_scale = 1.0f / 16777215.0f;
-    pc.flags = ((!use_rc && views[0]) ? 1u : 0u)
-             | (use_rc ? 2u : 0u)
-             | ((rs->alpha_func >= 0x200 && rs->alpha_func <= 0x207
-                 ? rs->alpha_func - 0x200 : 7u) << 8)
-             | ((rs->alpha_ref & 0xFF) << 16)
-             | (rs->alpha_test_enable ? 0x80000000u : 0u);
+                              0, VKB_NBIND, c.w);
     vkCmdPushConstants(V.cmd, V.pipe_layout,
                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0, sizeof pc, &pc);
+                       0, sizeof c.pc, &c.pc);
     vbufs[0] = vbufs[1] = V.vring.buffer;
     vstride[0] = sizeof(Nv2aVertex);
     vstride[1] = e ? sizeof(Nv2aVertexExt) : 0;
     vkCmdBindVertexBuffers2(V.cmd, 0, 2, vbufs, voff, NULL, vstride);
     vkCmdDraw(V.cmd, b->count, 1, 0, 0);
+}
+
+/* A batch whose vertex program nv2a_vsh.vert runs (Nv2aProgramBatch). The
+ * attributes' spans are copied once each -- interleaved attributes share one
+ * span -- and the indices go in as a triangle list. Constants and program
+ * are uploaded only when they changed since the last batch of this frame. */
+static int vkb_draw_program(const Nv2aSurface *g, const Nv2aBatch *b,
+                            const Nv2aProgramBatch *p)
+{
+    VkbDrawCtx c;
+    VkbVshAttrs *at;
+    struct { const uint8_t *lo, *hi; int a; } sp[16], t;
+    VkDeviceSize aoff, doff, ioff, total = 0, pos;
+    uint32_t ns = 0, i, j;
+    uint8_t *dst;
+    void *m;
+
+    if (!V.pipeline_vsh || !p->index_count || p->program_len > 136)
+        return 0;
+    if (!draw_prepare(g, b, &c))
+        return 1;                           /* nothing to draw into: dropped, as draw */
+
+    /* Spans, sorted by address; overlapping ones (interleaved) merge. */
+    for (i = 0; i < 16; i++)
+        if (p->attr[i].data) {
+            sp[ns].lo = p->attr[i].data;
+            sp[ns].hi = p->attr[i].data + p->attr[i].bytes;
+            sp[ns].a = (int)i;
+            ns++;
+        }
+    for (i = 1; i < ns; i++)
+        for (j = i; j > 0 && sp[j - 1].lo > sp[j].lo; j--) {
+            t = sp[j]; sp[j] = sp[j - 1]; sp[j - 1] = t;
+        }
+    for (i = 0; i < ns; ) {
+        const uint8_t *lo = sp[i].lo, *hi = sp[i].hi;
+        for (j = i + 1; j < ns && sp[j].lo <= hi + 64; j++)
+            if (sp[j].hi > hi)
+                hi = sp[j].hi;
+        total += 8 + (VkDeviceSize)(hi - lo);
+        i = j;
+    }
+    if (!(dst = ring_alloc(&V.vring, total + 8, V.ssbo_align, &doff))
+            || !(at = ring_alloc(&V.vring, sizeof *at, V.ubo_align, &aoff))
+            || !(m = ring_alloc(&V.vring, (VkDeviceSize)p->index_count * 4, 16, &ioff))) {
+        static int warned;
+        if (!warned++)
+            fprintf(stderr, "  [VK] vertex ring full this frame\n");
+        return 1;
+    }
+    memcpy(m, p->indices, (size_t)p->index_count * 4);
+    memset(at, 0, sizeof *at);
+    pos = 0;
+    for (i = 0; i < ns; ) {
+        const uint8_t *lo = sp[i].lo, *hi = sp[i].hi;
+        VkDeviceSize base;
+        for (j = i + 1; j < ns && sp[j].lo <= hi + 64; j++)
+            if (sp[j].hi > hi)
+                hi = sp[j].hi;
+        /* Keep the span's alignment within a word: loads stay aligned. */
+        base = ((pos + 3) & ~(VkDeviceSize)3) + ((uintptr_t)lo & 3);
+        memcpy(dst + base, lo, (size_t)(hi - lo));
+        for (; i < j; i++)
+            at->fmt[sp[i].a][0] = (uint32_t)(base + (VkDeviceSize)(sp[i].lo - lo));
+        pos = base + (VkDeviceSize)(hi - lo);
+    }
+    memset(dst + pos, 0, (size_t)(total + 8 - pos < 8 ? total + 8 - pos : 8));
+    for (i = 0; i < 16; i++) {
+        at->fmt[i][1] = p->attr[i].stride;
+        at->fmt[i][2] = p->attr[i].type;
+        at->fmt[i][3] = p->attr[i].data ? p->attr[i].size : 0;
+        memcpy(at->imm[i], p->imm[i], sizeof at->imm[i]);
+    }
+    at->misc[0][0] = p->aa_scale[0];
+    at->misc[0][1] = p->aa_scale[1];
+    at->misc[0][2] = p->uv_scale[0];
+    at->misc[0][3] = p->uv_scale[1];
+    at->misc[1][0] = p->fog_param[0];
+    at->misc[1][1] = p->fog_param[1];
+    at->misc[1][2] = p->fog_enable ? 1.0f : 0.0f;
+    at->misc[1][3] = (float)p->fog_mode;
+    at->misc[2][0] = (float)p->program_len;
+
+    if (V.vconst_serial != V.frame_serial || V.vconst_gen != p->constants_gen) {
+        void *k = ring_alloc(&V.vring, 192 * 16, V.ubo_align, &V.vconst_off);
+        if (!k)
+            return 1;
+        memcpy(k, p->constants, 192 * 16);
+        V.vconst_serial = V.frame_serial;
+        V.vconst_gen = p->constants_gen;
+    }
+    if (V.vprog_serial != V.frame_serial || V.vprog_gen != p->program_gen) {
+        uint32_t (*q)[4] = ring_alloc(&V.vring, 136 * 16, V.ubo_align, &V.vprog_off);
+        if (!q)
+            return 1;
+        memcpy(q, p->program, (size_t)p->program_len * 16);
+        memset(q + p->program_len, 0, (size_t)(136 - p->program_len) * 16);
+        V.vprog_serial = V.frame_serial;
+        V.vprog_gen = p->program_gen;
+    }
+
+    begin_rendering(c.s, c.d);
+    bind_pipeline(V.pipeline_vsh);
+    apply_state(b->state);
+    draw_frag_state(b, &c);
+    {
+        static const uint32_t bindings[4] = { VKB_BIND_VCONST, VKB_BIND_VPROG,
+                                              VKB_BIND_VATTR, VKB_BIND_VDATA };
+        VkDeviceSize offs[4], ranges[4];
+        offs[0] = V.vconst_off; ranges[0] = 192 * 16;
+        offs[1] = V.vprog_off;  ranges[1] = 136 * 16;
+        offs[2] = aoff;         ranges[2] = sizeof *at;
+        offs[3] = doff;         ranges[3] = total + 8;
+        for (i = 0; i < 4; i++) {
+            VkWriteDescriptorSet *w = &c.w[VKB_NBIND + i];
+            c.dbi[1 + i].buffer = V.vring.buffer;
+            c.dbi[1 + i].offset = offs[i];
+            c.dbi[1 + i].range = ranges[i];
+            w->sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w->dstBinding = bindings[i];
+            w->descriptorCount = 1;
+            w->descriptorType = i == 3 ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+                                       : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            w->pBufferInfo = &c.dbi[1 + i];
+        }
+    }
+    vkCmdPushDescriptorSetKHR(V.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, V.pipe_layout,
+                              0, VKB_NBIND_VSH, c.w);
+    vkCmdPushConstants(V.cmd, V.pipe_layout,
+                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0, sizeof c.pc, &c.pc);
+    vkCmdBindIndexBuffer(V.cmd, V.vring.buffer, ioff, VK_INDEX_TYPE_UINT32);
+    vkCmdDrawIndexed(V.cmd, p->index_count, 1, 0, 0, 0);
+    return 1;
 }
 
 static void pump_events(void)
@@ -1883,10 +2183,12 @@ static void update_title(void)
         /* The same figure in the log every 5 s, for runs nobody watches. */
         static uint32_t logged;
         if (now - logged >= 5000) {
-            fprintf(stderr, "  [VK] %s | decodes/5s: %u (%u new, %.1f Mtexels)\n",
+            fprintf(stderr, "  [VK] %s | decodes/5s: %u (%u new, %.1f Mtexels) | hashed: %u, %.1f MB\n",
                     tb + sizeof "Amped 2 (Recomp, Vulkan) | " - 1, V.stat_decodes,
-                    V.stat_new, (double)V.stat_decode_px / 1e6);
-            V.stat_decodes = V.stat_new = 0;
+                    V.stat_new, (double)V.stat_decode_px / 1e6, V.stat_hashes,
+                    (double)V.stat_hash_bytes / 1e6);
+            V.stat_decodes = V.stat_new = V.stat_hashes = 0;
+            V.stat_hash_bytes = 0;
             V.stat_decode_px = 0;
             logged = now;
         }
@@ -2116,7 +2418,8 @@ static void vkb_idle(void)
     present(0);
 }
 
-static const Nv2aBackend s_vk_backend = { vkb_clear, vkb_draw, vkb_flip, vkb_idle };
+static const Nv2aBackend s_vk_backend = { vkb_clear, vkb_draw, vkb_flip, vkb_idle,
+                                           vkb_draw_program };
 
 /* ---- the window on the process main thread ------------------------------ */
 

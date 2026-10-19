@@ -66,6 +66,14 @@ available as the reference (`AMPED2_RENDERER=cpu`) for comparison dumps; the Vul
 - **Frame pacing**: Amped 2 does not wait for the vblank itself; it relies on the flip stalling until the vblank
   (presentation interval 1). The executor ended FLIP_STALL at once, so on the GPU the title flipped ~300 times a second.
   `RECOMP_FLIP_VSYNC=1` (default in `scripts/run.sh`) makes FLIP_STALL wait for the next emulated vblank.
+- **Vertex programs on the GPU**: `vkb_draw_program` (back-end entry `draw_program`) draws program batches with a
+  second pipeline whose vertex shader `nv2a_vsh.vert` interprets the NV2A program (bindings 9-12: constants UBO,
+  program UBO, attribute-format UBO, vertex bytes SSBO; indexed draw). Constants and program are uploaded once per frame
+  and change (generations). The position goes out as clip space (screen position × w), so the GPU clips; the CPU path
+  clipped at the near plane itself. FFP/screen-space/CXT_WRITE batches still arrive as transformed triangles (`draw`).
+- **Per-frame rings grow**: a ring that refused allocations in a frame is recreated larger at the next frame start
+  (the race overflowed the 32 MB vertex ring and lost the rest of each frame: HUD, rider). Texture re-validation
+  skips textures that failed to decode in this frame.
 - Checking presented frames without a screen: the Mesa screenshot layer,
   `VK_INSTANCE_LAYERS=VK_LAYER_MESA_screenshot VK_LAYER_MESA_SCREENSHOT_CONFIG="frames=200-6-150,output_dir=<dir>"`
   (PNG per frame, overlay included – `AMPED2_VK_DUMP` dumps the guest surface only).

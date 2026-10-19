@@ -366,4 +366,38 @@ _(date – what was done, what was found, next step)_
   - Lessons: frame trace + `RECOMP_PB_SEGLOG=1` (each RunPushBuffer's target and return); a gdb watchpoint
     (`watch -l` on mem_offset + VA) found the tail's writer. A frame whose state reads zero (pitch 0, blend eq 0) means
     data executed as commands upstream, not a shader bug.
+- 2026-10-19 – **Riding: 7 → ~55 fps, HUD / goals board / rider complete (matches xemu).**
+  - Test: Millicent 1 → Evergreen (Media Challenge card → "CHALLENGES" board → ride). xemu reference shots of the card,
+    the board and the ride (snapshot `millicent1_menu`, `a` ×3); our side driven by `scripts/press.sh` with
+    `AMPED2_VK_DUMP`. Before: 7-9 fps, no HUD, no board, rider bald / without upper body in most frames (the user saw
+    them come and go).
+  - **Missing HUD, board, hair, hands, upper body = vertex ring overflow.** The Vulkan back end's per-frame vertex ring
+    (32 MB) ran full in the race; every draw after that was dropped for the rest of the frame (one "vertex ring full"
+    line per run, easy to miss). HUD, board, the rider's RunPushBuffer meshes come late in the frame. Now a ring that
+    refused allocations grows (doubling, up to 1 GB) at the next frame start (`ring_reset`, both rings); the race needs
+    64 MB on the CPU path. Ruled out on the way (with new log lines that stay): RunPushBuffer returns outside the
+    segment or past ring data (`[SEG] ... rest dropped` / `... bytes skipped`, never seen).
+  - **Texture re-validation**: a 512x512 texture of format 0x30 (`LU_IMAGE_DEPTH_Y16_FIXED`, the rider's shadow map)
+    cannot be decoded, so `texture_view` hashed its 1 MB again at every draw: ~2.9 GB/s, 70 % of the NV2A thread.
+    Failed decodes are now remembered for the frame and first sights are hashed only after a successful decode; the
+    hash runs four independent lanes. The 5-s `[VK]` line shows `hashed: n, MB`. 7 → 13-15 fps.
+  - **Vertex programs on the GPU** (the rest: perf showed the NV2A thread at 100 %, ~40 % in the CPU interpreter for
+    ~160 000 program runs a frame, ~30 % converting/clipping/copying every triangle corner; the pool ran 2.4x one
+    thread – spin-waiting workers and chunked work split were tried, measured no gain, and reverted). New optional
+    back-end entry `draw_program` (runtime patch, `nv2a_backend.h` `Nv2aProgramBatch`): for program batches without
+    CXT_WRITE the executor only gathers the attribute spans, a rebased triangle-list index buffer and the decoded program
+    (`nv2a_vsh_export`, program/constant generations). `src/render/shaders/nv2a_vsh.vert` interprets the program per
+    vertex with the CPU interpreter's semantics (same fields, ops, defaults, fog unit) and outputs clip space
+    (screen position × w), so the GPU clips at w > 0. Second pipeline `pipeline_vsh`, bindings 9-12 (constants,
+    program, attribute formats, vertex bytes), indexed draws. FFP, screen-space and CXT_WRITE batches keep the CPU path.
+    `RECOMP_VSH_CPU=1` (executor) or `AMPED2_VK_CPU_VSH=1` (back end) force the CPU transform for comparisons.
+    **Result: ~55 fps on the slope** (54-58 in the 5-s log); the NV2A thread is ~60 % busy, the game thread waits in
+    D3D KickOff; the rest to 60 is vsync pacing (menus were ~55 before this too).
+  - Checked: card, board, HUD and rider against xemu; default flow (MGS/XSN logos and intro played, Start skips →
+    legal → title → menus); CPU renderer (`AMPED2_RENDERER=cpu`) main menu with the rider; MinGW syntax check of the
+    changed runtime files. Not checked: Vulkan validation layers (not installed), the Steam Deck.
+  - Still different from xemu: **no rider shadow** – the shadow map is a D16 depth texture (0x30) the back end cannot
+    sample yet (needs the depth surface as a texture with a compare sampler, NV097 shadow compare function).
+  - Lesson: a back end that drops work on a full ring must say so loudly and grow; "comes and goes" rendering under load
+    points at per-frame budgets, not at the pushbuffer walk.
 
