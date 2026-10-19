@@ -80,8 +80,8 @@ void sub_00255202(void)
  * memory and ring space the executor has not walked yet; the toolkit docs
  * list the symptoms (data drawn as state, objects drawn black). Some menu
  * batches did read freed blocks (0xFDFDFDFD, the game allocator's free fill,
- * FUN_000DDC90). Note: the riders' missing upper body is NOT fixed by this --
- * those batches are never submitted at all (docs/notes.md).
+ * FUN_000DDC90). (The riders' missing upper body was the executor not
+ * following RunPushBuffer's JUMPs; see amped2_d3d_software_method.)
  *
  * Now the executor writes the real semaphore (device + 0x30) at every
  * BACK_END_WRITE_SEMAPHORE_RELEASE, and this waits for it like the original's
@@ -141,6 +141,72 @@ void sub_0031E7E0(void)
         }
     }
     g_esp += 8;                             /* ret 4 */
+}
+
+/* D3D's software-method handler for RunPushBuffer, run by the executor
+ * (nv2a_pb_set_software_method_handler; registered in src/main.c).
+ *
+ * RunPushBuffer (FUN_00328690) draws the riders' prebuilt mesh pushbuffers
+ * with a JUMP from the ring; each ends in a JUMP back, which D3D patches for
+ * every run (together with any fixups). When the pushbuffer may still be in
+ * use by an earlier run, D3D does not patch it then: it writes NO_OPERATION
+ * with a parameter in front of the JUMP and leaves the patch to its GPU
+ * interrupt handler (FUN_00322830), which runs when the GPU gets there.
+ * Without that interrupt the executor walked each run with whatever return
+ * address and fixups a later run had already written -- the rider's passes
+ * from different frames, and ring data executed as commands.
+ *
+ * Parameter: low 5 bits the kind, the rest a record. 0xD: slot (param >> 5)
+ * of the device's record array at 0x0032ACC0 (20 bytes each); 0xC and 0xE:
+ * the record's address in the ring, (param >> 5) | 0x80000000. 0xC and 0xD
+ * also count down the pending patches at 0x0032AAAC. The handler's flush
+ * (FUN_0031EC30) is left out: it waits for the executor itself to answer,
+ * and nothing here caches the writes. The other kinds seen (0x08, 0x09)
+ * write PGRAPH registers the executor does not model. */
+static void run_pushbuffer_patch(uint32_t rec)
+{
+    /* FUN_003285F0: a chain of records {flags|return, next, tail, fixups,
+     * base}. Each fixup: byte count, offset from base, bytes. */
+    do {
+        uint32_t v = MEM32(rec), next;
+        MEM32(MEM32(rec + 8)) = (v & 0x0FFFFFFFu) + 1;     /* JUMP back */
+        if (v & 0x20000000u) {
+            uint32_t base = MEM32(rec + 16), p = MEM32(rec + 12), n;
+            while ((n = MEM32(p)) != 0xFFFFFFFFu) {
+                uint32_t dst = MEM32(p + 4) + base, i;
+                for (i = 0; i < n; i++)
+                    MEM8(dst + i) = MEM8(p + 8 + i);
+                p += 8 + n;
+            }
+        }
+        next = MEM32(rec + 4);
+        MEM32(rec + 4) = 0xFFFFFFFFu;
+        if (v & 0x80000000u)
+            MEM32(rec) = v & 0xBFFFFFFFu;
+        rec = next;
+    } while (rec + 1 > 1);                       /* neither 0 nor ~0 */
+}
+
+void amped2_d3d_software_method(uint32_t param)
+{
+    switch (param & 0x1F) {
+    case 0x0D:
+        __atomic_sub_fetch((volatile uint32_t *)XBOX_PTR(0x0032AAACu), 1, __ATOMIC_SEQ_CST);
+        run_pushbuffer_patch(0x0032ACC0u + (param >> 5) * 20);
+        break;
+    case 0x0C:
+        __atomic_sub_fetch((volatile uint32_t *)XBOX_PTR(0x0032AAACu), 1, __ATOMIC_SEQ_CST);
+        /* fall through */
+    case 0x0E:
+        run_pushbuffer_patch((param >> 5) | 0x80000000u);
+        break;
+    default: {
+        static int warned;
+        if (warned++ < 5)
+            fprintf(stderr, "[D3D] software method 0x%08X not modelled\n", param);
+        break;
+    }
+    }
 }
 
 /* XNetGetTitleXnAddr (exported stub 0x002BB66E: `mov ecx, [0x0038C238]; jmp

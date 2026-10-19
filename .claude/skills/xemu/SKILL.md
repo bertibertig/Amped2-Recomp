@@ -85,6 +85,7 @@ Rules:
 | `intro_movie` | Cold boot, ~40 s in: intro movie (after the MGS and XSN Sports logo movies) |
 | `title` | Title screen "PRESS START TO BEGIN" (Y = Xbox demos) |
 | `main_menu` | Main Menu, Career highlighted, profile Sasha |
+| `player1_menu` | Main Menu with a fresh profile "Player1" (default look: blonde, red jacket, grey pants) – the same rider our build creates |
 | `millicent1_menu` | Career → Ride! → Millicent 1, challenge list (Evergreen highlighted), 3D level behind it |
 | `millicent1_ride` | Millicent 1, Evergreen session: riding, HUD visible |
 

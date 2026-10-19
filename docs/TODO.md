@@ -30,7 +30,9 @@
 - [x] Main menu, career menu, level select (Vulkan, 60 fps)
 - [x] Dot-product texture shader modes (CPU path): rider pants/shoes/head lit and textured
 - [x] Dot-product modes + real cube maps in the Vulkan shader/back end (rider matches the CPU path)
-- [ ] Rider upper body (jacket, arms) and head base pass never submitted by the game – find out why (compare a fresh profile in xemu)
+- [x] Rider upper body, gloves, head and hair: RunPushBuffer JUMPs followed, D3D's software-method patch done by the executor (matches xemu, 60 fps)
+- [ ] Software methods 0x08/0x09 (PGRAPH register writes from D3D's GPU interrupt handler) are logged, not modelled
+- [ ] Rider in a ride (Millicent 1) still to check against xemu once riding works
 - [ ] Per-title save root: `~/.local/share/xboxrecomp/Cache` (z:) is shared with SSX3-Recomp (RECOMP_SAVE_DIR per port?)
 - [ ] First run on the mountain (Millicent 1): entering the Evergreen session crashes – ICALLs 0x000A5A70 and
       0x0024F240 unresolved, then SIGSEGV in sub_00241910 → seeds

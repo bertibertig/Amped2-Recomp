@@ -338,3 +338,32 @@ _(date – what was done, what was found, next step)_
     `Nv2aBatchExt.eye_vector`. The back end decodes the six faces one by one through `nv2a_backend_decode_texture`.
   - Result (Career menu, Vulkan vs. CPU dumps): the rider's pants and shoes are lit and textured the same in both;
     49 fps in the menu as before. Not checked: the Vulkan validation layer (not installed here).
+- 2026-10-19 – **Rider complete (upper body, gloves, head, hair) – matches xemu.**
+  - xemu reference: a fresh profile ("Player1", default Choose a Look) shows a blonde rider in a red jacket, gloves and
+    the same grey pants (snapshot `player1_menu`). The profile file `U:\<id>\Career.parts` lists `f_tops_jacket_bulky`,
+    gloves, head, ponytail: data and profile were fine. (`z:\CharWad\CharWad.bdr` is only built when a boarder is
+    created or changed – also optional, not the cause.)
+  - Cause 1: the upper body, head and hair are drawn with XDK **RunPushBuffer** (`FUN_00328690`): a JUMP from the ring
+    into a prebuilt pushbuffer (e.g. `0x01398880`), which JUMPs back at its end. The segment scan treated every JUMP as
+    the ring's wrap and ended the segment – those draws (and everything after them up to the next PUT) were lost, which
+    looked like "the game never submits them" (only the third, additive pass sat elsewhere). Runtime patch: a JUMP out
+    of the ring is followed until its JUMP back (`nv2a_pb_scan.c`, `s_ring_lo/hi`, `pb_target_va`); the ring wrap scans
+    up to the wrap JUMP instead of the highest PUT seen.
+  - Cause 2 (the glitching after that: two poses in different colour channels, zeroed state, frames without draws):
+    RunPushBuffer patches the pushbuffer's JUMP back (and fixups) per run. While the pushbuffer may still be in use it
+    instead emits `NO_OPERATION` with a parameter in front of the JUMP – a **software method**; D3D's GPU interrupt handler
+    (`FUN_00322830` → `FUN_003285F0`) patches it when the GPU gets there. The runtime raises no GPU interrupts, so the
+    executor ran each run with a later run's return address. Runtime patch: `nv2a_pb_set_software_method_handler`
+    (NV097 0x0100 with a parameter); `src/recomp_manual.c` `amped2_d3d_software_method` does the handler's work for kinds
+    0x0C/0x0D/0x0E (records at `0x0032ACC0` + slot·20 or `(param >> 5) | 0x80000000`, pending count `0x0032AAAC`).
+  - Performance: the rider is ~10 000 indices × 3 passes of CPU vertex programs. Vertex-cache misses are now transformed
+    on the raster thread pool (`vxf_job`); the executor answers the busy bits (flush 0x100410, vblank) every 256 words
+    and after every draw – D3D's flush (`0x0031EC30`) and vblank handler (`0x00322390`) spun until the end of each
+    segment (58 % of CPU time, 15–40 fps). PGRAPH_STATUS (0x400700) now reads busy from a flush until the following PUT
+    has executed, so D3D's idle waits (KickOff `0x0031EA90`, BlockUntilIdle) see the executor's real progress.
+  - Result: main menu at a steady 60 fps / 55 draws over 60 s on Vulkan, frames match xemu; CPU renderer matches too;
+    default flow (logos, intro, title, menus, Career → RIDE!) unchanged.
+  - Lessons: frame trace + `RECOMP_PB_SEGLOG=1` (each RunPushBuffer's target and return); a gdb watchpoint
+    (`watch -l` on mem_offset + VA) found the tail's writer. A frame whose state reads zero (pitch 0, blend eq 0) means
+    data executed as commands upstream, not a shader bug.
+

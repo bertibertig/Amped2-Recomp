@@ -543,6 +543,14 @@ static int boot_and_run(void)
      * replaced in src/recomp_manual.c (sub_0031E7E0) and the executor writes
      * the real semaphore. */
 
+    /* D3D's GPU-interrupt work for RunPushBuffer, done by the executor when it
+     * reaches the software method (src/recomp_manual.c). */
+    {
+        extern void amped2_d3d_software_method(uint32_t param);
+        extern void nv2a_pb_set_software_method_handler(void (*fn)(uint32_t));
+        nv2a_pb_set_software_method_handler(amped2_d3d_software_method);
+    }
+
     /* Step 5b': Render back end.
      *
      * AMPED2_RENDERER=vulkan (the default in scripts/run.sh) hands the
