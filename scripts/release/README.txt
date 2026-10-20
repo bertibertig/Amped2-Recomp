@@ -36,8 +36,8 @@ c) Check the layout: default.xbe must sit directly in game_files, not in a
    keep every file and folder as extracted (upper/lower case does not matter).
 
     Amped2-Recomp-.../
-      amped2_recomp
-      run.sh
+      amped2_recomp       (amped2_recomp.exe on Windows)
+      run.sh              (run.bat on Windows)
       README.txt          (this file)
       game_files/
         default.xbe
@@ -46,8 +46,9 @@ c) Check the layout: default.xbe must sit directly in game_files, not in a
         Movies/
         ...               (the rest of the disc)
 
-Without game_files/default.xbe, ./run.sh stops with a message saying where the
-files belong. Saves go to ~/.local/share/xboxrecomp, not into game_files.
+Without game_files/default.xbe, ./run.sh (run.bat) stops with a message saying
+where the files belong. Saves go to ~/.local/share/xboxrecomp (Windows:
+%LOCALAPPDATA%\xboxrecomp), not into game_files.
 
 
 2. Start the game
@@ -65,7 +66,16 @@ Linux (x86-64, glibc 2.39 or newer: Ubuntu 24.04+, Fedora 40+, Arch, SteamOS 3.6
   The game opens a resizable window (internal resolution 640x480, 4:3).
   Saves go to ~/.local/share/xboxrecomp.
 
-There is no Windows or macOS package yet.
+Windows (10 or 11, x86-64): double-click run.bat. The console output goes to
+  run.log next to it. Windows is experimental and NOT playable yet:
+  - It only has the software (CPU) renderer: about 4-6 fps in the menus and
+    about 2 fps on the slope. The fast Vulkan renderer is Linux-only so far.
+  - So far it has only been tested on Linux with Wine and Proton, not on a
+    real Windows PC. Reports from Windows 10/11 are welcome.
+  - Under Wine/Proton the movies stay black and there is no music (sound
+    effects work).
+
+There is no macOS package yet.
 
 
 3. Controls
@@ -93,10 +103,12 @@ Keyboard (player 1, only while the game window has the focus):
 
   AMPED2_SKIP_LOGOS=0     show the Microsoft Game Studios logo (skipped by default)
   AMPED2_SKIP_INTRO=1     skip the intro movie too
-  AMPED2_RENDERER=cpu     software renderer (reference, slow)
+  AMPED2_RENDERER=cpu     software renderer (reference, slow; Linux only, Windows
+                          always uses it)
   AMPED2_PAD_TRACE=1      log every controller button change
 
 e.g.  AMPED2_SKIP_INTRO=1 ./run.sh
+On Windows: set AMPED2_SKIP_INTRO=1 in a console, then start run.bat from it.
 
 
 5. Known issues
@@ -113,6 +125,10 @@ e.g.  AMPED2_SKIP_INTRO=1 ./run.sh
   scaling, widescreen or full-screen modes yet.
 - Not tested on a Steam Deck yet.
 - Audio is mixed to stereo (no 5.1).
+- The software renderer (Windows, AMPED2_RENDERER=cpu) draws stray triangles
+  stretched out from trees and other objects.
+- Windows: see section 2 (software renderer only, very slow; black movies and
+  no music under Wine/Proton).
 
 Bug reports: https://github.com/bertibertig/Amped2-Recomp/issues
-Please attach the console output (./run.sh 2>&1 | tee run.log).
+Please attach the console output (./run.sh 2>&1 | tee run.log; Windows: run.log).

@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # Builds the release packages into dist/ (no game files in them):
 #   dist/Amped2-Recomp-<version>-linux-x86_64.tar.gz    built in an Ubuntu 24.04 container -> runs on glibc 2.39+
-#   dist/Amped2-Recomp-<version>-windows-x86_64.zip     MinGW cross build (scripts/build_win.sh), only with WINDOWS=1
+#   dist/Amped2-Recomp-<version>-windows-x86_64.zip     MinGW cross build (scripts/build_win.sh)
 #   scripts/package_release.sh v0.1.0
 # Needs: docker (or podman) for the Linux build, mingw-w64-gcc and zip on the host for the Windows build, and the
 # generated code (scripts/run_pipeline.sh).
-#   SKIP_LINUX=1   no Linux package
-#   WINDOWS=1      also the Windows package (off while the Windows build is not tested, see docs/RELEASING.md)
+#   SKIP_LINUX=1 / SKIP_WINDOWS=1   build only one of them
 source "$(dirname "$0")/_common.sh"
 VERSION="${1:?Usage: scripts/package_release.sh <version, e.g. v0.1.0>}"
 [ -f "$GEN_DIR/recomp_funcs.h" ] || { echo "No generated code. First run: scripts/run_pipeline.sh" >&2; exit 1; }
@@ -40,7 +39,7 @@ if [ "${SKIP_LINUX:-0}" != 1 ]; then
   echo "Linux package: $PKG.tar.gz"
 fi
 
-if [ "${WINDOWS:-0}" = 1 ]; then
+if [ "${SKIP_WINDOWS:-0}" != 1 ]; then
   JOBS="$JOBS" "$ROOT/scripts/build_win.sh"
   PKG="$DIST/Amped2-Recomp-$VERSION-windows-x86_64"
   rm -rf "$PKG"; mkdir -p "$PKG"

@@ -27,19 +27,22 @@ It follows the same route as SSX3-Recomp (our SSX 3 port with the same toolkit):
 | Riding (Millicent 1): HUD, challenge cards, goals board, ~55 fps on Vulkan | ✅ |
 | Rider shadow, steady 60 fps, widescreen / resolution / full screen | ⬜ |
 | First release: [v0.1.0](https://github.com/bertibertig/Amped2-Recomp/releases) (Linux x86-64) | ✅ |
+| Windows build (MinGW): boots, menus and a ride under Wine/Proton, software renderer only (~2-6 fps) | 🟡 |
 
 Plan and open items: [docs/TODO.md](docs/TODO.md), running log: [docs/notes.md](docs/notes.md).
 
 ## Playing a release
 
-1. Download the Linux package from the [releases page](https://github.com/bertibertig/Amped2-Recomp/releases)
+1. Download the package for your system from the [releases page](https://github.com/bertibertig/Amped2-Recomp/releases)
    and unpack it.
 2. Put **your own** game files into its `game_files/` folder – see [Preparing the game files](#preparing-the-game-files).
-3. Start it with `./run.sh`.
+3. Start it with `./run.sh` (Linux) or by double-clicking `run.bat` (Windows; console output in `run.log`).
 
 Needs glibc 2.39 or newer (Ubuntu 24.04+, Fedora 40+, Arch, SteamOS 3.6+), SDL2 and a Vulkan driver
-(`sudo apt install libsdl2-2.0-0 libvulkan1 mesa-vulkan-drivers`). No Windows package yet: the MinGW cross build
-(`scripts/build_win.sh`) compiles but is untested.
+(`sudo apt install libsdl2-2.0-0 libvulkan1 mesa-vulkan-drivers`).
+
+**Windows (10/11) is experimental and not playable yet**: software renderer only (about 4-6 fps in the menus, 2 fps
+on the slope), so far only tested under Wine and Proton, where the movies stay black and the music is missing.
 
 ## Preparing the game files
 
@@ -58,7 +61,7 @@ Supported is the **PAL/EU version** (title ID 4D530041, `default.xbe` SHA-1
 
    or `xdvdfs unpack "Amped 2.iso" game_files`. Already have an extracted disc folder? Copy its contents instead.
 3. **Put it in the right place**: a folder named `game_files`
-   - **release package**: next to `run.sh` and `amped2_recomp` in the unpacked package folder;
+   - **release package**: next to `run.sh` / `run.bat` in the unpacked package folder;
    - **build from source**: in the repository root (`scripts/extract_iso.sh <image.iso | folder>` does steps 2–3).
 4. **Check the layout**: `default.xbe` must sit directly in `game_files/`, not in a subfolder (no
    `game_files/Amped 2/default.xbe`). The whole disc is about 4 GB; keep every file and folder as extracted (the
@@ -76,8 +79,9 @@ Amped2-Recomp-v0.1.0-linux-x86_64/
     └── … (the rest of the disc)
 ```
 
-Without `game_files/default.xbe`, `./run.sh` stops with a message telling you where the files belong. Saves and
-the game's cache go to `~/.local/share/xboxrecomp`, not into `game_files/`.
+Without `game_files/default.xbe`, `./run.sh` (`run.bat`) stops with a message telling you where the files belong.
+Saves and the game's cache go to `~/.local/share/xboxrecomp` (Windows: `%LOCALAPPDATA%\xboxrecomp`), not into
+`game_files/`.
 
 ## Quick start (Linux)
 

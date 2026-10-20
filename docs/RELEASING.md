@@ -33,8 +33,8 @@ Same scheme as SSX3-Recomp's `docs/RELEASING.md`.
 scripts/package_release.sh <version> > logs/package-<version>.log 2>&1    # background, ~10-15 min
 ```
 
-Linux is built in the Ubuntu 24.04 container (glibc 2.39+). `WINDOWS=1` adds the MinGW package – only once the
-Windows build has been tested (v0.1.0: compiles, untested, not shipped). Checks:
+Linux is built in the Ubuntu 24.04 container (glibc 2.39+), Windows with the host's MinGW (`SKIP_WINDOWS=1` leaves
+it out). Checks:
 
 ```bash
 tail -3 logs/package-<version>.log; cat dist/SHA256SUMS-<version>.txt
@@ -42,6 +42,7 @@ tar tvzf dist/Amped2-Recomp-<version>-linux-x86_64.tar.gz
 tar tzf dist/Amped2-Recomp-<version>-linux-x86_64.tar.gz | grep -iE '\.(xbe|iso|xiso|xpr|xmv|wma|res|json)$|/gen/' && echo "GAME DATA FOUND - STOP"
 objdump -T dist/Amped2-Recomp-<version>-linux-x86_64/amped2_recomp | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1   # <= 2.39
 objdump -p dist/Amped2-Recomp-<version>-linux-x86_64/amped2_recomp | grep NEEDED
+x86_64-w64-mingw32-objdump -p dist/Amped2-Recomp-<version>-windows-x86_64/amped2_recomp.exe | grep 'DLL Name'   # XINPUT1_4, UCRT, no MinGW DLLs
 ```
 
 ## Test (Linux)
@@ -60,6 +61,16 @@ Choose a Look → main menu → Career → Millicent 1 → challenge card → go
 Pass criteria: missing-files message; still running at the time limit (no crash); frames show the menus and **a
 ride** with rider and HUD; fps lines near 55-60. Do not publish a build that does not reach a ride.
 
+## Test (Windows under Wine and Proton, by hand for now)
+
+Unpack the zip into `logs/release-test-<version>-win/pkg`, link the disc files into its `game_files/`, then start
+`run.bat` with an own prefix – `wine cmd /c Z:\…\run.bat` (`WINEPREFIX=…`) and
+`umu-run cmd.exe /c Z:\…\run.bat` (`PROTONPATH=GE-Proton`, own `WINEPREFIX`). Pass
+`RECOMP_PAD_LIVE=Z:\…\pad_live.txt` and `RECOMP_FB_DUMP=Z:\…\dumps\w RECOMP_FB_WINDOW_DUMP_EVERY=120`, append
+presses to the pad file (hold them: `start:800`, `a:800` – the game polls at ~5 fps) and look at the dumps. Movies
+are not in the dumps (video overlay). v0.1.0 state: boot, new profile saved, menus and a ride on Millicent 1 at
+~2-6 fps, black movies, no music, stray triangles. A crash or a run that no longer reaches a ride is a regression.
+
 ## Work log
 Add a `docs/notes.md` entry (date, version, test results) before the release commit.
 
@@ -70,5 +81,6 @@ git push origin main
 git tag -a <version> -m "Amped2-Recomp <version>" && git push origin refs/tags/<version>
 gh release create <version> --verify-tag --title "Amped2-Recomp <version>" \
   --notes-file docs/release-notes/<version>.md --latest \
-  dist/Amped2-Recomp-<version>-linux-x86_64.tar.gz dist/SHA256SUMS-<version>.txt
+  dist/Amped2-Recomp-<version>-linux-x86_64.tar.gz dist/Amped2-Recomp-<version>-windows-x86_64.zip \
+  dist/SHA256SUMS-<version>.txt
 ```

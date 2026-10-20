@@ -57,7 +57,15 @@
 - [ ] Steam Deck: built-in controls through Steam Input
 
 ## Later
-- [ ] Windows build (MinGW + Proton, then native), Steam Deck test, macOS
+- [x] Windows package (MinGW): boots, menus and a ride under Wine 11 / GE-Proton with `RECOMP_WIN_PLACEHOLDER=1`
+      (set by `run.bat`), software renderer only (~2-6 fps); shipped with v0.1.0 as experimental
+- [ ] Windows: Vulkan back end (Win32 surface) – the software renderer is far too slow to play
+- [ ] Windows under Wine/Proton: movies stay black (video overlay in the D3D11/CPU window path) and no music
+      (sound effects play) – check whether the Linux music dropout is the same cause
+- [ ] Windows: test on real Windows 10/11
+- [ ] Software renderer: stray triangles stretched out from trees/objects (seen on Windows; check
+      `AMPED2_RENDERER=cpu` on Linux)
+- [ ] Steam Deck test, macOS
 - [ ] 60 fps everywhere, then higher frame rates, resolution, AA, widescreen, HD textures
 - [ ] Custom soundtrack support from a host folder
 - [ ] Windowed, Fullscreen and Borderless Windowed modes

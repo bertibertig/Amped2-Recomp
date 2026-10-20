@@ -415,3 +415,26 @@ _(date – what was done, what was found, next step)_
     (`Player1` in `~/.local/share/xboxrecomp`) – a first start without a save was not part of this run.
   - Windows: `scripts/build_win.sh` compiles and links (warnings only) but was not run, so no Windows package.
   - New known issue (user report): the music stops suddenly; it comes back later, very quiet and crackling (TODO).
+- 2026-10-20 – **Saving/loading checked against xboxrecomp PR 237** (POSIX opens relative to a `RootDirectory`
+  handle, the SSX 3 "Unable to save" fix; not in our runtime patch).
+  - Amped 2 does not hit that bug: every save-file open uses a full path (`U:\<profile>\Career.*`, `*_Progress.lua`,
+    `SaveMeta.xbx`, `T:\PrevSessionInfo.lua`). Over all logs: no bare-name opens, no failed U:/T: create or
+    overwrite (disp 2/3/5 all `0x00000000`), and the profile written on 2026-10-19 (overwritten in place) loads at
+    boot in the v0.1.0 release test. Not exercised yet: deleting a save, a first start without any save.
+  - The PR's fix is generic; worth taking into our patch anyway so both ports share the same runtime behaviour.
+- 2026-10-20 – **Windows package added to v0.1.0 (experimental), tested under Wine 11.20 and GE-Proton 11-11.**
+  - MinGW linked `xinput1_3.dll` (DirectX 2010 redistributable only); CMakeLists now links `xinput1_4` as
+    SSX3-Recomp does. Imports: d3d11, D3DCOMPILER_47, XAudio2_8, XINPUT1_4, MFPlat/MFReadWrite, UCRT – no MinGW DLLs.
+  - Under Wine the default layout fails: `tiled aperture at 0xF0000000 failed (error 487)` (host 0x1_0000_0000 is
+    taken; RAM mirrors 26/27 fail too) and the game crashes writing the first intro-movie frame through 0xF1F33100.
+    The runtime's opt-in `RECOMP_WIN_PLACEHOLDER=1` (VirtualAlloc2 placeholder for the whole 4 GB window) maps it and
+    the alias check passes; `scripts/release/run.bat` sets it by default. Untested on real Windows.
+  - Result (Wine and Proton, own prefixes, `run.bat`, pad through `RECOMP_PAD_LIVE`, holds of 800 ms – 150 ms taps
+    get lost at ~5 fps): missing-files message; title; new profile (boarder select, name) saved under
+    `%LOCALAPPDATA%\xboxrecomp`; main menu and Career with the complete rider; Millicent 1 → Main Street → Media
+    Challenge → ride. Software renderer only: 4-6 fps menus, ~2 fps riding.
+  - Seen by the user while watching: movies stay black, no music (sound effects play), and the software renderer
+    draws stray triangles stretched out from the trees (probably also on Linux with `AMPED2_RENDERER=cpu`). In TODO.
+  - `scripts/package_release.sh` builds the Windows zip by default now (`SKIP_WINDOWS=1`); manual Wine/Proton test
+    steps in `docs/RELEASING.md`. The zip was added to the existing v0.1.0 release (tag unchanged; the build changes
+    are listed in its notes under "For developers").
