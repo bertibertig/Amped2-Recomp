@@ -296,9 +296,20 @@ static void host_yield(void)
 
 static double now_sec(void)
 {
+#ifdef _WIN32
+    /* timespec_get is UCRT only; MSYS2 MINGW64 and Ubuntu's mingw-w64 link
+     * msvcrt. LARGE_INTEGER passed as its 64-bit integer view. */
+    extern __declspec(dllimport) int __stdcall QueryPerformanceCounter(long long *);
+    extern __declspec(dllimport) int __stdcall QueryPerformanceFrequency(long long *);
+    long long count, freq;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&count);
+    return (double)count / (double)freq;
+#else
     struct timespec ts;
     timespec_get(&ts, TIME_UTC);
     return (double)ts.tv_sec + ts.tv_nsec * 1e-9;
+#endif
 }
 
 void sub_002CDE60(void)

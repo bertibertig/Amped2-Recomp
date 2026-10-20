@@ -58,6 +58,10 @@ jobs:
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
+      # MSYS2's git has its own HOME and does not trust the checkout made by the runner's git (dubious ownership),
+      # so git apply in scripts/ci.sh would fail.
+      - name: Trust the checkout
+        run: git config --global --add safe.directory '*'
       - name: Build and test
         env:
           CMAKE_GENERATOR: Ninja
