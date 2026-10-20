@@ -107,6 +107,22 @@ All of them are candidates for an upstream PR to sp00nznet/xboxrecomp.
   (layout in the header). `backend_flush`'s state building is now `backend_state`, shared by both paths.
   `RECOMP_VXF_STATS=1` prints CPU transform statistics. Amped 2 race: 13-15 → ~55 fps.
 - `nv2a_pb_scan.c`: logs a RunPushBuffer that returns outside its segment (rest dropped) or skips ring data.
+- `kernel_hal.c`: **dispatch lock** – DISPATCH_LEVEL now excludes DPCs, as on the Xbox's one CPU. A thread holds a
+  global lock from the moment its IRQL reaches DISPATCH_LEVEL until it drops below; a DPC (entered through
+  `xbox_IrqlEnterInterrupt(2)`) takes it too, ISRs (device IRQL) do not. DirectSound's lock is a raise to
+  DISPATCH_LEVEL: its stream DPC used to run between a game thread's SET_CURRENT_VOICE and the following volume / SSL
+  writes, so they landed on the wrong voice (Amped 2: music mono, quiet or silent, no next track, static, a crash).
+  A DPC waits at most `RECOMP_DISPATCH_LOCK_MS` (100) for a raised thread, then runs anyway with a warning and the
+  `[IRQLHOLD]` holder list; `RECOMP_DISPATCH_LOCK=0` turns it off.
+- `apu_dsp.c`: **stereo downmix of the speaker bins** – FL/FR + C and BL/BR at -3 dB to both sides, crosstalk bins
+  6..9 as their speakers, LFE left out, the I3DL2 send (10) at -6 dB to both sides; FX sends 11..31 even/odd as
+  before. The even/odd fold put LFE on the right only and the rears at full level (Amped 2's music: left 1.7x,
+  right 2.7x, clipping). `RECOMP_APU_MIXDOWN=legacy` restores the even/odd fold.
+- Audio diagnostics (`apu_vp.c`, `apu_dsp.c`, `apu_core.c`): under `RECOMP_APU_TRACE` a `[APU-VROUTE]` line per voice
+  (list, envelope, pauses, all eight bin/volume pairs; multipass voices included) and `[APU-BINS]` (RMS per mixbin,
+  samples the mixdown clamped) every second; `RECOMP_APU_TRACE_NO_MMIO=1` keeps those without the per-access register
+  log; `RECOMP_APU_SSL_LOG=1` logs every stream list set/done/starve with a timestamp; `RECOMP_APU_VOICE_LOG=<voice>`
+  logs every front-end method naming that voice (with the writer's guest stack for volume writes).
 
 Verified: Linux build + Windows cross build (MinGW) compile; own decoder test (8 cases, ucontext) green;
 `tools.recomp.test_reserved_idents` green; SSX 3 on Linux reaches the same state as under Proton

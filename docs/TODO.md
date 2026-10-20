@@ -20,9 +20,13 @@
 - [x] First start, seeds, KEVENTs, fence/vblank, DirectSound/AC'97, heap reclaim
 - [x] NV2A video overlay (movies) in the runtime + SDL window
 - [x] Movies play at full speed (DPC latency fixed in the runtime)
-- [ ] **Music bug** (user report, 2026-10-20): the music stops suddenly while playing; it comes back later, but very
-      quiet and crackling (APU voice/stream state – WMA/XACT streaming, volume envelope, buffer underrun?)
-- [ ] 5.1 multichannel audio: XMV/DirectSound set up 6 mix bins; the APU output is mixed to stereo for now
+- [x] **Music bug** (user report, 2026-10-20): music stopped, came back quiet/crackling, no next track, static, crash –
+      DirectSound's stream DPC raced game threads at DISPATCH_LEVEL (runtime dispatch lock); stereo downmix of the
+      speaker bins fixed the left/right imbalance and clipping (see notes 2026-10-21)
+- [ ] 5.1 multichannel audio: XMV/DirectSound set up 6 mix bins; the APU output is mixed down to stereo (ITU-style
+      downmix of bins 0..9 now); real 5.1 needs a 6-channel host device and XC_AUDIO surround
+- [ ] GP/EP DSP: effect sends (I3DL2 bin 10, FX sends 11..31) are added dry; the title's DSP image (yetidsp.bin)
+      would run reverb/effects on them
 - [x] Seed the XPP callbacks 0x0032E3A4, 0x0032EDAB, 0x003306DF
 - [x] Re-run the pipeline for seed 0x0032FC8B (XPP callback seen in the intro run)
 - [x] Xbox Live / XNet: XNetGetTitleXnAddr answers "no network" (more XNet calls may need the same)
@@ -61,7 +65,8 @@
       (set by `run.bat`), software renderer only (~2-6 fps); shipped with v0.1.0 as experimental
 - [ ] Windows: Vulkan back end (Win32 surface) – the software renderer is far too slow to play
 - [ ] Windows under Wine/Proton: movies stay black (video overlay in the D3D11/CPU window path) and no music
-      (sound effects play) – check whether the Linux music dropout is the same cause
+      (sound effects play) – recheck with the dispatch lock (the Linux music dropout was a DPC race, which a
+      ~2-6 fps software-rendered run hits all the more)
 - [ ] Windows: test on real Windows 10/11
 - [ ] Software renderer: stray triangles stretched out from trees/objects (seen on Windows; check
       `AMPED2_RENDERER=cpu` on Linux)

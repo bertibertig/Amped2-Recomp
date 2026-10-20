@@ -471,3 +471,42 @@ _(date – what was done, what was found, next step)_
     `scripts/test_pad.sh`) on POSIX only – the Windows host_pad.c reads XInput.
   - Local check from a fresh clone: Linux native 2/2 passed; MinGW cross (`CI_TARGET=mingw`) settings test passed
     under Wine. The Windows job builds natively in MSYS2 MINGW64 (same compiler family as the release package).
+- 2026-10-21 – **Music dropouts fixed: DirectSound's stream DPC raced game threads at DISPATCH_LEVEL** (branch
+  `fix/race-music-dropouts`). User report: in rides the music stops, comes back quiet/crackling; idling in the menu
+  the first track ends and none follows, then static, and ~20 s into a ride the game crashed (main thread,
+  `sub_001772F0` reading guest VA 0xA4000000 – a wild pointer).
+  - Tooling (runtime, env-gated, see patches/xboxrecomp/README.md): `[APU-VROUTE]` all eight bin/volume pairs per voice
+    (multipass voices too), `[APU-BINS]` RMS per mixbin + clamped samples, `RECOMP_APU_TRACE_NO_MMIO=1`,
+    `RECOMP_APU_SSL_LOG=1`, `RECOMP_APU_VOICE_LOG=<voice>` (front-end methods naming that voice, writer's guest stack
+    on volume writes); `RECOMP_AUDIO_WAV` + numpy for the output level per 10 s.
+  - How the game plays music: one stereo 44.1 kHz stream voice (v69 in our runs, fmt 5981E0A4) in the multipass list,
+    L+R into submix bin 31 at 62D; a multipass voice (v68) reads bin 31 and sends it to FL/FR/LFE at 0 dB and BL/BR at
+    0C0. xemu (`millicent1_ride`, voice lists walked over `xp`, scratch script) shows exactly this, stable all ride.
+    Bin 31 is time-shared within the MP list (an effect writes it, a 3D submix voice v26 consumes and clears it, then
+    the music writes it) – list order matters and is processed like xemu.
+  - Ours: the music voice's routing kept changing during rides to `L→31, L→0`, right channel muted, at changing
+    levels (887, D31, 9B3 …) – mono, quiet or near-silent music. `RECOMP_APU_VOICE_LOG=69`: DirectSound wrote those
+    volumes itself, via the game's play/update-sound helper `sub_0008D990` (sound ids 0/3, from `sub_00090C80`) – for
+    another voice: `FECV=73` (game thread selected voice 73), then the stream DPC's `SET_CURRENT_VOICE 0x45` +
+    `SET_VOICE_SSL_B` for the music, then the game thread's VOLA/VOLB/VOLC landed on 69. The reverse (the DPC's SSL
+    writes landing on another voice) left the music stream starving (hundreds of starved fetches per minute in rides,
+    10-frame bursts) and explains the missing next track and static. On the Xbox's single CPU DirectSound's lock is a
+    raise to DISPATCH_LEVEL, so its DPC cannot run inside such a sequence; the runtime ran DPCs on the timer thread
+    regardless of IRQL.
+  - Fix 1 (runtime, `kernel_hal.c`): **dispatch lock** – a thread holds a global lock while its IRQL is at/above
+    DISPATCH_LEVEL; DPCs take it too (they wait at most `RECOMP_DISPATCH_LOCK_MS`=100, then run with a warning);
+    ISRs do not. `RECOMP_DISPATCH_LOCK=0` turns it off.
+  - Fix 2 (runtime, `apu_dsp.c`): the GP/EP are stubs and the even/odd fold of all 32 bins put the music's LFE copy
+    on the right and the rears at full level (left 1.7x, right 2.7x, clipping on loud passages). Bins 0..9 are now an
+    ITU-style stereo downmix (C and rears at -3 dB, crosstalk bins as their speakers, LFE dropped), the I3DL2 send
+    (10) at -6 dB to both sides (folded left it made rides left-heavy), FX sends 11..31 even/odd as before.
+    `RECOMP_APU_MIXDOWN=legacy` restores the old fold. So the user's 2.0/5.1 question: the mixdown caused the
+    imbalance and crackle, the dropouts were the DPC race.
+  - Results (Linux, Vulkan, 60 fps unchanged): race run 240 s – music routing stays 31/62D all ride, L = R within
+    0.1 % per 10 s, one 78-sample clip burst; music stream starved 2x (was hundreds); menu idle 8 min – track change
+    at ~300 s, next track follows, zcr music-like (no static), 0 host underruns; the user's sequence (logo movies on,
+    intro skipped with Start, idle in the Ride menu past the track change, then a 2-min ride, 9 min) – continuous
+    balanced music, no crash, no "DPC waited" warning. The crash did not recur in any run; the race is the likely
+    cause (state written to the wrong voice) but it was not reproduced before the fix either, so keep watching.
+  - MinGW cross build links; `scripts/ci.sh` 2/2. Likely relevant to SSX3-Recomp too (same runtime and XDK
+    DirectSound) – to be ported back there and checked.
