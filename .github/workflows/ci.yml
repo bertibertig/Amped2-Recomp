@@ -1,0 +1,64 @@
+# Build + host tests on Linux and Windows.
+#
+# CI has no game data, so there is no generated code: scripts/ci.sh does the host-only build (the patched xboxrecomp
+# runtime and all of our sources compile, no game executable is linked) and runs the ctest suite (tests/).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux (GCC, Vulkan)
+    runs-on: ubuntu-24.04          # same base as docker/Dockerfile, the release build environment
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config libsdl2-dev libepoxy-dev libssl-dev libgl-dev glslc
+      - name: Build and test
+        env:
+          CMAKE_GENERATOR: Ninja
+        run: scripts/ci.sh
+
+  windows:
+    name: Windows (MinGW-w64, D3D11)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      # The runtime patch is applied with git apply; CRLF checkouts would not match it.
+      - name: Keep LF line endings
+        shell: pwsh
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: >-
+            git
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+      - name: Build and test
+        env:
+          CMAKE_GENERATOR: Ninja
+        run: scripts/ci.sh

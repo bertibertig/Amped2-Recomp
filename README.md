@@ -1,5 +1,7 @@
 # Amped2-Recomp
 
+[![CI](https://github.com/bertibertig/Amped2-Recomp/actions/workflows/ci.yml/badge.svg)](https://github.com/bertibertig/Amped2-Recomp/actions/workflows/ci.yml)
+
 Experimental **static recompilation of Amped 2 (original Xbox, 2003)** into a native x86-64 PC program,
 based on [xboxrecomp](https://github.com/sp00nznet/xboxrecomp) (Git submodule under `xboxrecomp/`).
 The game's own code is translated to C once and compiled natively; the xboxrecomp runtime and our own
@@ -174,6 +176,11 @@ keyboard keeps working on port 1 alongside a pad.
 - `scripts/test_pad.sh` checks hotplug, the map and rumble with a virtual pad, no hardware needed.
 
 Code: `src/input/host_pad.c` (same as SSX3-Recomp's `ssx3_pad.c`; replaces the runtime's `xinput_device.c`).
+
+Tests and CI: `scripts/ci.sh` builds with the host tests on and runs them with ctest (settings file, virtual pad);
+no game data needed. Without generated code it is a host-only build: the patched runtime and all of our sources
+compile, no game executable is linked. GitHub Actions (`.github/workflows/ci.yml`) runs it on Linux (GCC, Vulkan) and
+Windows (MSYS2 MinGW-w64) for every push to `main` and every pull request.
 
 Optional: `scripts/fetch_references.sh` (reference ports into `reference/`), `scripts/ghidra.sh`
 (Ghidra names for the generated code, needs Ghidra under `/opt/ghidra` or `GHIDRA_HOME`).

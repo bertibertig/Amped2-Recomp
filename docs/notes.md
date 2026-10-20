@@ -461,4 +461,13 @@ _(date – what was done, what was found, next step)_
   - Results (RTX 2080 Ti): 3x 16:9, 2x 21:9 and 2x 16:9 borderless on the 270 Hz monitor reach the ride with correct
     proportions; menus ~210 fps (FIFO at 270 Hz), rides 85-115 fps – CPU-bound (perf: guest spinning in D3D for the
     NV2A thread, pushbuffer decode, texture hashing; TODO). Original mode unchanged (60 fps, 4:3).
-
+- 2026-10-20 – **CI: GitHub Actions build + host tests on Linux and Windows** (`.github/workflows/ci.yml`,
+  `scripts/ci.sh`).
+  - CI has no XBE, so no generated code: with `src/recomp/gen/` empty, CMake now builds `amped2_recomp` as an OBJECT
+    library (host-only build) and takes `recomp_types.h` from `xboxrecomp/templates/runtime/` (byte-identical to the
+    copy the recompiler writes). Runtime + main.c, recomp_manual.c, settings, Vulkan back end all compile; nothing links.
+  - `-DAMPED2_TESTS=ON` adds `tests/CMakeLists.txt`: `settings_test` (new: defaults, parsing, invalid values, env
+    overrides, save/load round trip, directory creation) on both platforms, `pad_virtual` (SDL virtual pad, as
+    `scripts/test_pad.sh`) on POSIX only – the Windows host_pad.c reads XInput.
+  - Local check from a fresh clone: Linux native 2/2 passed; MinGW cross (`CI_TARGET=mingw`) settings test passed
+    under Wine. The Windows job builds natively in MSYS2 MINGW64 (same compiler family as the release package).

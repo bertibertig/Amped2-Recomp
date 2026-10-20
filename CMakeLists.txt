@@ -75,10 +75,27 @@ set(GAME_SOURCES
 #   src/recomp/recomp_types.h        - register model, ICALL macros, MEM helpers
 
 # WIN32 = GUI subsystem on Windows (WinMain); ignored elsewhere.
-add_executable(${PROJECT_NAME} WIN32
-    ${GAME_SOURCES}
-    ${RECOMP_GEN_SOURCES}
-)
+#
+# Without generated code (a fresh clone, CI -- the code comes from your own
+# XBE and is never committed) there is nothing to link: build our sources as
+# an object library instead, so the runtime, the host and the tests still
+# compile. recomp_manual.c includes recomp/gen/recomp_types.h, which the
+# recompiler copies from the toolkit's template; use the template directly.
+if(RECOMP_GEN_SOURCES)
+    set(AMPED2_HOST_ONLY OFF)
+    add_executable(${PROJECT_NAME} WIN32
+        ${GAME_SOURCES}
+        ${RECOMP_GEN_SOURCES}
+    )
+else()
+    set(AMPED2_HOST_ONLY ON)
+    message(STATUS "No generated code in src/recomp/gen: host-only build "
+                   "(runtime + host sources compiled, no game executable)")
+    configure_file(${XBOXRECOMP_DIR}/templates/runtime/recomp_types.h
+                   ${CMAKE_BINARY_DIR}/host_only/recomp/gen/recomp_types.h COPYONLY)
+    add_library(${PROJECT_NAME} OBJECT ${GAME_SOURCES})
+    target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_BINARY_DIR}/host_only)
+endif()
 
 # Link against the xboxrecomp umbrella target (all 6 runtime libraries)
 target_link_libraries(${PROJECT_NAME} PRIVATE xboxrecomp)
@@ -186,4 +203,12 @@ if(MSVC)
 elseif(MINGW)
     # Same section limit for MinGW's assembler.
     target_compile_options(${PROJECT_NAME} PRIVATE -Wa,-mbig-obj)
+endif()
+
+# ── Host tests (ctest) ──────────────────────────────────────────
+# No game data needed; tests/CMakeLists.txt lists them.
+option(AMPED2_TESTS "Build the host tests (run with ctest)" OFF)
+if(AMPED2_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
 endif()
