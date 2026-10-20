@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Starts the built port from the repo root (paths in src/main.c are relative to it).
+# Starts the built port from the repo root or from an unpacked release folder (paths in src/main.c are relative
+# to it).
 #   scripts/run.sh                          # output to the console
 #   scripts/run.sh 2>&1 | tee logs/run.log  # for doctor.sh / seed_from_log
 # Runtime switches (details: docs/notes.md, xboxrecomp/docs). Defaults are the SSX3-Recomp ones:
@@ -23,11 +24,23 @@
 #   AMPED2_SKIP_LOGOS=1     skip the MGS / XSN logo movies (default here); AMPED2_SKIP_INTRO=1 skips the intro too
 #   AMPED2_PAD_TRACE=1      log every controller button change
 #   RECOMP_PAD_LIVE=<file>  emulated pad 1 presses every line appended to <file> – default logs/pad_live.txt,
-#                           emptied at every start; send keys with scripts/press.sh start / a:400 / down …
+#                           emptied at every start (repo only, not in a release package); send keys with
+#                           scripts/press.sh start / a:400 / down …
 #   RECOMP_PAD_SCRIPT=40000:start,44000:a   timed presses (ms after the pad enumerates), or =@file
 #   RECOMP_WATCHDOG_SECS=n / RECOMP_KERNEL_LOG_BUDGET=n   hang watchdog / longer kernel trace
-source "$(dirname "$0")/_common.sh"
-[ -x "$ROOT/build/amped2_recomp" ] || { echo "No build. First run: scripts/build.sh" >&2; exit 1; }
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -x "$HERE/amped2_recomp" ]; then
+  set -euo pipefail                                   # release package: binary, run.sh and game_files/ side by side
+  ROOT="$HERE"; EXE="$ROOT/amped2_recomp"; PACKAGE=1
+else
+  source "$HERE/_common.sh"
+  EXE="$ROOT/build/amped2_recomp"; PACKAGE=0
+  [ -x "$EXE" ] || [ ! -x "$ROOT/build-docker/amped2_recomp" ] || EXE="$ROOT/build-docker/amped2_recomp"   # scripts/docker.sh build
+fi
+[ -x "$EXE" ] || { echo "No build. First run: scripts/build.sh" >&2; exit 1; }
+[ -f "$ROOT/game_files/default.xbe" ] || {
+  echo "game_files/default.xbe missing: put the extracted contents of your Amped 2 Xbox disc (PAL) into $ROOT/game_files/" >&2
+  exit 1; }
 cd "$ROOT"
 export RECOMP_TITLE_KEVENTS="${RECOMP_TITLE_KEVENTS:-1}"
 export RECOMP_VBLANK="${RECOMP_VBLANK:-1}"
@@ -44,6 +57,8 @@ fi
 export RECOMP_USB="${RECOMP_USB:-1}"
 export RECOMP_KEYBOARD="${RECOMP_KEYBOARD:-1}"
 export AMPED2_SKIP_LOGOS="${AMPED2_SKIP_LOGOS:-1}"   # MGS/XSN logos off (AMPED2_SKIP_INTRO=1: the intro too)
-export RECOMP_PAD_LIVE="${RECOMP_PAD_LIVE:-$ROOT/logs/pad_live.txt}"
-mkdir -p "$(dirname "$RECOMP_PAD_LIVE")" && : > "$RECOMP_PAD_LIVE"
-exec ./build/amped2_recomp "$@"
+if [ "$PACKAGE" = 0 ] || [ -n "${RECOMP_PAD_LIVE:-}" ]; then
+  export RECOMP_PAD_LIVE="${RECOMP_PAD_LIVE:-$ROOT/logs/pad_live.txt}"
+  mkdir -p "$(dirname "$RECOMP_PAD_LIVE")" && : > "$RECOMP_PAD_LIVE"
+fi
+exec "$EXE" "$@"

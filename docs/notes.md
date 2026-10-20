@@ -401,3 +401,17 @@ _(date – what was done, what was found, next step)_
   - Lesson: a back end that drops work on a full ring must say so loudly and grow; "comes and goes" rendering under load
     points at per-frame budgets, not at the pushbuffer walk.
 
+- 2026-10-20 – **Release v0.1.0 (Linux x86-64).**
+  - New release tooling (from SSX3-Recomp): `docker/Dockerfile` + `scripts/docker.sh` (Ubuntu 24.04 build container,
+    `AMPED2_VENV`), `scripts/package_release.sh` (Linux package; `WINDOWS=1` for the MinGW one), `scripts/release/`
+    (player README, `game_files/` note), `scripts/test_release.sh`, `docs/RELEASING.md`. `run.sh` also runs from an
+    unpacked package (binary next to it) and stops with a message when `game_files/default.xbe` is missing.
+    License: GPL-3.0-or-later (`LICENSE`), as SSX3-Recomp.
+  - Package: binary, `run.sh`, READMEs, licenses – no game data. Highest symbol GLIBC_2.38; NEEDED only libSDL2,
+    libc, libm (Vulkan through volk at run time).
+  - `scripts/test_release.sh v0.1.0`: missing-files message ok; default flow (intro played, Start skips) → legal →
+    main menu → Career → Millicent 1 → Media Challenge card → goals board → ride, rider and HUD complete, 55-60 fps,
+    still running after 150 s. Tested on Garuda Linux, RTX 2080 Ti (NVIDIA driver), with the existing profile
+    (`Player1` in `~/.local/share/xboxrecomp`) – a first start without a save was not part of this run.
+  - Windows: `scripts/build_win.sh` compiles and links (warnings only) but was not run, so no Windows package.
+  - New known issue (user report): the music stops suddenly; it comes back later, very quiet and crackling (TODO).

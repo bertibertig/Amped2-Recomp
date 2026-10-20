@@ -20,6 +20,8 @@
 - [x] First start, seeds, KEVENTs, fence/vblank, DirectSound/AC'97, heap reclaim
 - [x] NV2A video overlay (movies) in the runtime + SDL window
 - [x] Movies play at full speed (DPC latency fixed in the runtime)
+- [ ] **Music bug** (user report, 2026-10-20): the music stops suddenly while playing; it comes back later, but very
+      quiet and crackling (APU voice/stream state – WMA/XACT streaming, volume envelope, buffer underrun?)
 - [ ] 5.1 multichannel audio: XMV/DirectSound set up 6 mix bins; the APU output is mixed to stereo for now
 - [x] Seed the XPP callbacks 0x0032E3A4, 0x0032EDAB, 0x003306DF
 - [x] Re-run the pipeline for seed 0x0032FC8B (XPP callback seen in the intro run)
@@ -58,3 +60,4 @@
 - [ ] Windows build (MinGW + Proton, then native), Steam Deck test, macOS
 - [ ] 60 fps everywhere, then higher frame rates, resolution, AA, widescreen, HD textures
 - [ ] Custom soundtrack support from a host folder
+- [ ] Windowed, Fullscreen and Borderless Windowed modes

@@ -23,10 +23,61 @@ It follows the same route as SSX3-Recomp (our SSX 3 port with the same toolkit):
 | Movies through the NV2A video overlay, real-time (logos, intro) | ✅ |
 | Legal screen, title, main menu, career menu, level select | ✅ |
 | Vulkan renderer: 60 fps in the menus (CPU renderer ~6 fps, kept as the reference) | ✅ |
-| 3D rider model in the menus | 🟡 black silhouette |
-| Riding | ⬜ |
+| 3D rider model in the menus and on the slope (matches the Xbox) | ✅ |
+| Riding (Millicent 1): HUD, challenge cards, goals board, ~55 fps on Vulkan | ✅ |
+| Rider shadow, steady 60 fps, widescreen / resolution / full screen | ⬜ |
+| First release: [v0.1.0](https://github.com/bertibertig/Amped2-Recomp/releases) (Linux x86-64) | ✅ |
 
 Plan and open items: [docs/TODO.md](docs/TODO.md), running log: [docs/notes.md](docs/notes.md).
+
+## Playing a release
+
+1. Download the Linux package from the [releases page](https://github.com/bertibertig/Amped2-Recomp/releases)
+   and unpack it.
+2. Put **your own** game files into its `game_files/` folder – see [Preparing the game files](#preparing-the-game-files).
+3. Start it with `./run.sh`.
+
+Needs glibc 2.39 or newer (Ubuntu 24.04+, Fedora 40+, Arch, SteamOS 3.6+), SDL2 and a Vulkan driver
+(`sudo apt install libsdl2-2.0-0 libvulkan1 mesa-vulkan-drivers`). No Windows package yet: the MinGW cross build
+(`scripts/build_win.sh`) compiles but is untested.
+
+## Preparing the game files
+
+The game data always comes from **your own Amped 2 disc**; nothing of it is in this repository or in a release.
+Supported is the **PAL/EU version** (title ID 4D530041, `default.xbe` SHA-1
+`38e63cd016bf084d999e0a911933a52191bfc378`); other versions are not tested.
+
+1. **Make a disc image** (`.iso`) of your Amped 2 Xbox disc, e.g. on a modded Xbox or with an Xbox-compatible DVD
+   drive. Both a full disc image (Redump style) and a game-partition XISO work.
+2. **Extract the image** with [extract-xiso](https://github.com/XboxDev/extract-xiso) (AUR `extract-xiso-git`) or
+   [xdvdfs](https://github.com/antangelo/xdvdfs) (`cargo install xdvdfs-cli`):
+
+   ```bash
+   extract-xiso -x "Amped 2.iso" -d game_files
+   ```
+
+   or `xdvdfs unpack "Amped 2.iso" game_files`. Already have an extracted disc folder? Copy its contents instead.
+3. **Put it in the right place**: a folder named `game_files`
+   - **release package**: next to `run.sh` and `amped2_recomp` in the unpacked package folder;
+   - **build from source**: in the repository root (`scripts/extract_iso.sh <image.iso | folder>` does steps 2–3).
+4. **Check the layout**: `default.xbe` must sit directly in `game_files/`, not in a subfolder (no
+   `game_files/Amped 2/default.xbe`). The whole disc is about 4 GB; keep every file and folder as extracted (the
+   letter case of the names does not matter).
+
+```text
+Amped2-Recomp-v0.1.0-linux-x86_64/
+├── amped2_recomp
+├── run.sh
+└── game_files/
+    ├── default.xbe
+    ├── Audio/
+    ├── Levels/
+    ├── Movies/
+    └── … (the rest of the disc)
+```
+
+Without `game_files/default.xbe`, `./run.sh` stops with a message telling you where the files belong. Saves and
+the game's cache go to `~/.local/share/xboxrecomp`, not into `game_files/`.
 
 ## Quick start (Linux)
 
@@ -41,6 +92,10 @@ scripts/extract_iso.sh "/path/to/Amped 2 (Xbox).iso"   # or an already extracted
 scripts/run_pipeline.sh                            # parse, disasm, func_id, abi, recomp -> src/recomp/gen/
 scripts/doctor.sh                                  # bring-up report
 ```
+
+Without the build dependencies on the host: `scripts/docker.sh scripts/run_pipeline.sh` and
+`scripts/docker.sh scripts/build.sh` do the same in an Ubuntu 24.04 container (docker or podman), the binary goes to
+`build-docker/` and `scripts/run.sh` picks it up. Release packages: [docs/RELEASING.md](docs/RELEASING.md).
 
 `scripts/run.sh` starts the game (Vulkan renderer, logos skipped; `AMPED2_RENDERER=cpu` for the CPU reference). Useful switches: `AMPED2_SKIP_INTRO=1` (skip the
 intro movie too), `AMPED2_SKIP_LOGOS=0` (show the MGS/XSN logos). While it runs, `scripts/press.sh start`
@@ -105,7 +160,7 @@ Start `claude` in the repo root: [CLAUDE.md](CLAUDE.md) explains the goal, layou
 ## References
 
 - xboxrecomp: https://github.com/sp00nznet/xboxrecomp (MIT)
-- SSX3-Recomp (our SSX 3 port, private): https://github.com/bertibertig/SSX3-Recomp
+- SSX3-Recomp (our SSX 3 port): https://github.com/bertibertig/SSX3-Recomp
 - SSX3-recomp by Koen Hendriks and Corné Dorrestijn: https://github.com/koenhendriks/SSX3-recomp (GPL-2.0-or-later, findings only)
 - SSX Tricky PC: https://github.com/MatiasRiveraC/SSX-Tricky-PC · OpenTricky: https://github.com/GiZcesi/OpenTricky (GPL-3.0-only)
 - [xemu](https://xemu.app) as the behaviour reference
@@ -115,4 +170,8 @@ Start `claude` in the repo root: [CLAUDE.md](CLAUDE.md) explains the goal, layou
 Unofficial fan project, not affiliated with or endorsed by Microsoft. Amped and Xbox are trademarks of
 Microsoft. The repository holds only original code, tooling and notes.
 
-License of our own files: still to be decided (xboxrecomp: MIT).
+## License
+
+This project's own code is licensed under the **GNU General Public License v3.0 or later** – see
+[LICENSE](LICENSE). The xboxrecomp submodule (MIT, LGPL-2.1 parts) and the other third-party code (volk: MIT,
+Vulkan-Headers: Apache-2.0/MIT) keep their own licenses.
