@@ -25,7 +25,8 @@ It follows the same route as SSX3-Recomp (our SSX 3 port with the same toolkit):
 | Vulkan renderer: 60 fps in the menus (CPU renderer ~6 fps, kept as the reference) | ✅ |
 | 3D rider model in the menus and on the slope (matches the Xbox) | ✅ |
 | Riding (Millicent 1): HUD, challenge cards, goals board, ~55 fps on Vulkan | ✅ |
-| Rider shadow, steady 60 fps, widescreen / resolution / full screen | ⬜ |
+| Graphics settings: resolution 1x-5x, 4:3 / 16:9 / 16:10 / 21:9, unlocked frame rate, window modes (TUI) | ✅ |
+| Rider shadow, steady 60 fps | ⬜ |
 | First release: [v0.1.0](https://github.com/bertibertig/Amped2-Recomp/releases) (Linux x86-64) | ✅ |
 | Windows build (MinGW): boots, menus and a ride under Wine/Proton, software renderer only (~2-6 fps) | 🟡 |
 
@@ -105,6 +106,26 @@ Without the build dependencies on the host: `scripts/docker.sh scripts/run_pipel
 intro movie too), `AMPED2_SKIP_LOGOS=0` (show the MGS/XSN logos). While it runs, `scripts/press.sh start`
 (or `a`, `down`, `a:400`, `lt+rt` …) sends controller input; the keyboard and game controllers work as well
 (see Controls).
+
+## Graphics settings
+
+`scripts/run.sh --settings` (in a release package `./run.sh --settings`) opens the settings screen in the terminal
+before the game starts. Arrow keys move and change values, Tab switches between the categories and the options,
+Enter saves and starts, S saves, Q quits. The choices are saved in `~/.config/amped2-recomp/settings.ini`
+(Windows: `%APPDATA%\amped2-recomp\settings.ini`) and used on every later start.
+
+| Category | Options |
+|---|---|
+| Resolution Scaling | Internal resolution 1x-5x (640x480 up to 3200x2400 at 4:3) |
+| Aspect Ratio | 4:3 (original), 16:9, 16:10, 21:9. Rides become wider (Hor+: more of the slope at the sides, the HUD stays 4:3 in the middle); the menus and movies stay 4:3 |
+| Framerate | Original (60 fps) or unlocked, with a limit: the monitor's refresh rate (vsync), 60-360 fps or none. The game runs on its own clock, so gameplay speed does not change |
+| Display | Windowed, fullscreen or borderless fullscreen, and the monitor to use. Alt+Enter or F11 switch in the game |
+
+How high an unlocked frame rate gets depends on the CPU: on a ride it is about 90-120 fps for now (menus several
+hundred), the guest code and the NV2A thread are the limit, not the GPU. One run can override the file with
+environment variables, e.g. `AMPED2_RESOLUTION_SCALE=3 AMPED2_ASPECT_RATIO=21:9 scripts/run.sh`
+(`AMPED2_FRAMERATE`, `AMPED2_FRAME_LIMIT`, `AMPED2_WINDOW_MODE`, `AMPED2_DISPLAY`; `AMPED2_SETTINGS=<file>` uses
+another file). The Vulkan renderer only; the CPU renderer and the Windows build ignore resolution and aspect ratio.
 
 ## Controls
 

@@ -438,3 +438,27 @@ _(date – what was done, what was found, next step)_
   - `scripts/package_release.sh` builds the Windows zip by default now (`SKIP_WINDOWS=1`); manual Wine/Proton test
     steps in `docs/RELEASING.md`. The zip was added to the existing v0.1.0 release (tag unchanged; the build changes
     are listed in its notes under "For developers").
+- 2026-10-20 – **Graphics settings: resolution scale, aspect ratio, unlocked frame rate, window modes (+ TUI).**
+  - Research list of further enhancements chosen by the user → docs/TODO.md "Graphics enhancements" backlog.
+  - Settings file `~/.config/amped2-recomp/settings.ini` (`AMPED2_SETTINGS`, env overrides `AMPED2_RESOLUTION_SCALE`,
+    `_ASPECT_RATIO`, `_FRAMERATE`, `_FRAME_LIMIT`, `_WINDOW_MODE`, `_DISPLAY`), terminal TUI `--settings`
+    (src/settings/, ANSI + termios / Windows console, no curses; the display list comes from SDL).
+  - **Frame timing is real time**: the per-frame update (`sub_001BF290`) adds a float frame time to an accumulator and
+    stores accumulator x 30 at `0x3AD0C4`; the time comes from QueryPerformanceCounter (`sub_00250C88`, rdtsc).
+    `AMPED2_TIME_TRACE=1` logs it: ~30 ticks/s at a steady 60 fps (FLIP_VSYNC) and at 100-800 fps unlocked alike, so
+    unlocking is just `RECOMP_FLIP_VSYNC=0` plus a cap in the back end (FIFO for "display refresh", else a timed
+    wait before present). No interpolation needed.
+  - Resolution scale: every Vulkan surface is allocated at guest size x scale; vertices stay in guest pixels
+    (shaders normalise by the guest size, `surface_size` = guest size now).
+  - Aspect ratio: surfaces the title flips (0x8098C000 / 0x80AB8000) are re-created widened; every vertex drawn into
+    them gets NDC x x (4:3 / ratio) (push constant `x3d`). The world's geometry past the old screen edges fills the
+    sides (Hor+ works without game patches: the executor only clips at the near plane), the HUD keeps 4:3 in the
+    middle (user's choice). Menus are presented as the 4:3 middle of the surface: a frame is a "ride" when something
+    was drawn into an off-screen target in the last 30 flips (the 512x512 target at 0x80000000 exists only on the
+    mountain). XGetVideoFlags is `sub_00263799` (one caller, D3D present parameters): the runtime's XC_VIDEO value
+    has the widescreen bit at 0x01 where XAPI expects it at bit 16, so the game sees 4:3; it would only set
+    D3DPRESENTFLAG_WIDESCREEN anyway, the GUI has its own AspectRatio / AspectCorrect node fields (not used yet).
+  - Results (RTX 2080 Ti): 3x 16:9, 2x 21:9 and 2x 16:9 borderless on the 270 Hz monitor reach the ride with correct
+    proportions; menus ~210 fps (FIFO at 270 Hz), rides 85-115 fps – CPU-bound (perf: guest spinning in D3D for the
+    NV2A thread, pushbuffer decode, texture hashing; TODO). Original mode unchanged (60 fps, 4:3).
+

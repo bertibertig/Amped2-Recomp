@@ -66,6 +66,15 @@ Linux (x86-64, glibc 2.39 or newer: Ubuntu 24.04+, Fedora 40+, Arch, SteamOS 3.6
   The game opens a resizable window (internal resolution 640x480, 4:3).
   Saves go to ~/.local/share/xboxrecomp.
 
+  Graphics settings:  ./run.sh --settings
+  opens a settings screen in the terminal before the game starts: internal
+  resolution (1x-5x), aspect ratio (4:3, 16:9, 16:10, 21:9), frame rate
+  (original 60 fps or unlocked up to your monitor's refresh rate) and window
+  mode (windowed, fullscreen, borderless, which monitor). Arrow keys move and
+  change, Enter saves and starts, Q quits. The choices are remembered in
+  ~/.config/amped2-recomp/settings.ini. In the game Alt+Enter or F11 switches
+  between windowed and fullscreen.
+
 Windows (10 or 11, x86-64): double-click run.bat. The console output goes to
   run.log next to it. Windows is experimental and NOT playable yet:
   - It only has the software (CPU) renderer: about 4-6 fps in the menus and

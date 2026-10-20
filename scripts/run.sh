@@ -3,6 +3,7 @@
 # to it).
 #   scripts/run.sh                          # output to the console
 #   scripts/run.sh 2>&1 | tee logs/run.log  # for doctor.sh / seed_from_log
+#   scripts/run.sh --settings              # graphics settings screen first (src/settings, README "Graphics settings")
 # Runtime switches (details: docs/notes.md, xboxrecomp/docs). Defaults are the SSX3-Recomp ones:
 #   RECOMP_TITLE_KEVENTS=1  title-built KEVENTs get a host shadow (SSX 3 crashed in SetEvent on POSIX without)
 #   RECOMP_VBLANK=1         60 Hz VBlank interrupt; D3D_BlockUntilVerticalBlank waits for it
@@ -14,7 +15,8 @@
 #   RECOMP_FB_WINDOW=1      framebuffer window (SDL2) – set automatically for AMPED2_RENDERER=cpu
 #   RECOMP_RASTER_THREADS=n rasteriser worker threads (default: CPUs-4, POSIX pool from the runtime patch)
 #   RECOMP_FLIP_VSYNC=1     a flip waits for the next vblank (presentation interval 1) – without it the game flips
-#                           as fast as the renderer draws (~300 fps on Vulkan)
+#                           as fast as the renderer draws (~300 fps on Vulkan); the "unlocked" frame rate setting
+#                           turns it off and the Vulkan back end caps the flips instead
 #   RECOMP_HEAP_RECLAIM=1   frees really release memory (heap + contiguous arena). Amped 2 probes the largest free
 #                           contiguous block at boot and frees it again; without this it keeps ~47 MB for good and
 #                           XACT/USB allocations fail -> the game launches its error screen Boom.xbe

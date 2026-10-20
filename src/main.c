@@ -69,6 +69,7 @@
 #if defined(AMPED2_HAVE_VULKAN)
 #include "render/vk_backend.h"
 #endif
+#include "settings/settings.h"
 
 
 /*
@@ -648,6 +649,34 @@ static int boot_and_run(void)
 
 /* ── Host entry points ─────────────────────────────────────── */
 
+/* Graphics settings (src/settings/settings.h). --settings opens the settings
+ * screen in the terminal first. Returns 0 to boot, 1 when the player quit
+ * there.
+ *
+ * Unlocked frame rate: the executor's FLIP_STALL then does not wait for the
+ * emulated vblank (RECOMP_FLIP_VSYNC, set by scripts/run.sh); the Vulkan back
+ * end caps the flips instead. That is all it takes -- the game advances its
+ * clock by the measured frame time (QueryPerformanceCounter), ~30 ticks of
+ * its clock at 0x3AD0C4 per second at 60 fps and at 100-700 fps alike
+ * (docs/notes.md, 2026-10-20). */
+static int load_settings(int want_tui)
+{
+    if (want_tui) {
+        if (!amped2_settings_tui())
+            return 1;
+    } else {
+        amped2_settings_load();
+    }
+    if (g_amped2_settings.framerate == AMPED2_FPS_UNLOCKED) {
+#ifdef _WIN32
+        _putenv("RECOMP_FLIP_VSYNC=0");
+#else
+        setenv("RECOMP_FLIP_VSYNC", "0", 1);
+#endif
+    }
+    return 0;
+}
+
 #ifdef _WIN32
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                    LPSTR lpCmdLine, int nCmdShow)
@@ -662,6 +691,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     setvbuf(stderr, NULL, _IONBF, 0);
 
     printf("=== Amped 2 (Xbox) - Static Recompilation ===\n");
+    if (load_settings(lpCmdLine && strstr(lpCmdLine, "--settings") != NULL))
+        return 0;
 
     /* Install VEH handler (first handler in chain) */
     /* Load symbols up front rather than from inside the handler: at fault
@@ -729,12 +760,16 @@ int main(int argc, char **argv)
  * and runs boot_and_run on a second one; otherwise it just calls it. */
 int main(int argc, char **argv)
 {
-    (void)argc;
-    (void)argv;
+    int i, want_tui = 0;
 
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
 
+    for (i = 1; i < argc; i++)
+        if (!strcmp(argv[i], "--settings"))
+            want_tui = 1;
+    if (load_settings(want_tui))
+        return 0;
     printf("=== Amped 2 (Xbox) - Static Recompilation ===\n");
 
     install_posix_fault_handler();

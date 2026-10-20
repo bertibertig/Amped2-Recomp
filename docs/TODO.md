@@ -66,6 +66,47 @@
 - [ ] Software renderer: stray triangles stretched out from trees/objects (seen on Windows; check
       `AMPED2_RENDERER=cpu` on Linux)
 - [ ] Steam Deck test, macOS
-- [ ] 60 fps everywhere, then higher frame rates, resolution, AA, widescreen, HD textures
 - [ ] Custom soundtrack support from a host folder
-- [ ] Windowed, Fullscreen and Borderless Windowed modes
+
+## Graphics enhancements
+All options live in a categorised settings TUI (Resolution Scaling, Aspect Ratio, Framerate, Display, …) whose
+choices are saved to a config file and picked up on the next start.
+
+First batch (done 2026-10-20, `amped2_recomp --settings` / `scripts/run.sh --settings`, src/settings/):
+- [x] Settings TUI + persistent config file (categories per enhancement, selections remembered)
+- [x] Resolution scaling: internal resolution 1x-5x (640x480 → 3200x2400 at 4:3)
+- [x] Aspect ratio: 4:3, 16:9, 16:10, 21:9 – Hor+ in rides, HUD kept 4:3 in the middle, menus and movies 4:3
+- [x] Framerate: real unlock (the game runs on QueryPerformanceCounter time), limit = display refresh / fixed / none
+- [x] Window mode: windowed, fullscreen, borderless fullscreen + display selection, Alt+Enter / F11 in game
+- [ ] Ride frame rate is CPU-bound at ~85-115 fps (menus 200-800): the guest spins in D3D (`sub_0031EA90`, 22 %)
+      waiting for the NV2A thread – pushbuffer decode (`nv2a_pb_exec_method` 11 %, `note` 4 %), texture
+      re-validation hashing (`hash_guest_texture` 7 %, ~1 GB/s). Needed for 144-270 fps on the slope.
+- [ ] Ride/menu detection for the aspect ratio is a heuristic (draws into an off-screen target = ride, in_ride() in
+      vk_backend.c); a game-state flag would be exact. Splash screen at boot counts as a ride for ~30 flips
+- [ ] Hor+: objects the game culls against its 4:3 frustum may pop in at the far sides (not seen in Millicent 1)
+- [ ] Alt+Enter / F11 toggle not exercised by a test yet (needs window focus)
+
+Backlog (chosen 2026-10-20):
+- Anti-aliasing and filtering
+  - [ ] MSAA / SSAA (2x-8x on the Vulkan render targets, or supersampling on top of the resolution scale)
+  - [ ] Post-process AA (FXAA / SMAA final pass, also catches alpha-tested foliage and fences)
+  - [ ] Anisotropic filtering override (2x-16x)
+  - [ ] Sharpening (AMD CAS) / FSR 1 upscaling (Steam Deck)
+- Textures and detail
+  - [ ] HD texture packs: dump and replace textures by hash from a host folder
+  - [ ] High-resolution rider shadow map with PCF (depends on the D16 shadow-map item in Phase 2)
+  - [ ] LOD bias / model LOD / draw and fog distance (needs game-side research)
+  - [ ] Texture filter override (force linear/trilinear, keep-original option)
+- Display and widescreen
+  - [ ] HUD/UI correction for wide aspect ratios (keep 4:3 proportions, edge-anchored or pillarboxed)
+  - [ ] FOV slider (on top of the Hor+ aspect-ratio change)
+  - [ ] VSync on/off/adaptive, frame limiter options, FPS / frame-time overlay
+  - [ ] Output scaling modes: fit, stretch, integer; nearest vs linear for the final blit
+- In-game settings
+  - [ ] In-game overlay with the TUI's options, styled after Amped 2's own menus, pad-navigable (Steam Deck Game
+        Mode has no terminal)
+- Post-processing and extras
+  - [ ] Brightness / gamma / saturation; optional HDR output (scRGB / HDR10)
+  - [ ] CRT / scanline filter
+  - [ ] Toggle or tune the game's own screen effects (blur, glow, overlays – needs research)
+  - [ ] Full-resolution screenshot hotkey, later a photo mode

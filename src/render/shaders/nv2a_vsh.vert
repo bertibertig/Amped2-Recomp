@@ -11,6 +11,7 @@ layout(push_constant) uniform PC {
     vec2  tex_size;       // texels of stage 0; (1,1) when untextured
     float z_scale;        // 1 / depth-buffer maximum (Z24: 1/16777215)
     uint  flags;          // see nv2a.frag
+    float x3d;            // NDC x factor for the aspect ratio (nv2a.vert)
 } pc;
 
 // c[0..191]
@@ -261,6 +262,7 @@ void main()
     // with the program's w, so the GPU clips at w > 0 and interpolates
     // perspective-correctly.
     vec2 ndc = pos.xy / pc.surface_size * 2.0 - 1.0;
+    ndc.x *= pc.x3d;                                  // aspect ratio (nv2a.vert)
     gl_Position = vec4(ndc * pos.w, pos.z * pc.z_scale * pos.w, pos.w);
 
     v_diffuse = clamp(O[3], 0.0, 1.0);

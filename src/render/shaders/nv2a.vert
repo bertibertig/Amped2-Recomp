@@ -21,6 +21,7 @@ layout(push_constant) uniform PC {
     vec2  tex_size;       // texels of stage 0; (1,1) when untextured
     float z_scale;        // 1 / depth-buffer maximum (Z24: 1/16777215)
     uint  flags;          // see nv2a.frag
+    float x3d;            // NDC x factor: 4:3 / aspect ratio on widened surfaces, else 1
 } pc;
 
 layout(location = 0) out vec4 v_diffuse;
@@ -40,6 +41,11 @@ void main()
     // colour and UVs interpolate perspective-correctly; pre-transformed
     // vertices carry rhw = 1.
     float w = in_pos.w > 0.0 ? 1.0 / in_pos.w : 1.0;
+    // A wider aspect ratio than the title's 4:3 (vk_backend.c): everything
+    // keeps its 4:3 proportions in the middle of the wider surface; the
+    // world's geometry beyond the original screen edges fills the sides
+    // (Hor+), 2D (HUD) stays a 4:3 block.
+    ndc.x *= pc.x3d;
     gl_Position = vec4(ndc * w, in_pos.z * pc.z_scale * w, w);
     v_diffuse = in_diffuse;
     v_uv = in_uv / pc.tex_size;

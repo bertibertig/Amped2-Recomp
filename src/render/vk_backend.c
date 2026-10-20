@@ -19,12 +19,33 @@
  *   AMPED2_VK_GPU=<substr>    pick the physical device whose name contains it
  *   AMPED2_VK_TEXLOG=1        log the first 60 re-decodes of cached textures
  *   AMPED2_VK_NO_RC=1         ignore the combiner extension (milestone-2 look)
+ *   AMPED2_TIME_TRACE=1       log the game's clock next to wall time and flips (every 5 s)
+ *
+ * Graphics settings (src/settings/settings.h):
+ *   resolution scale  every render target is allocated at its guest size times
+ *                     the scale; vertices arrive in guest surface pixels and the
+ *                     shaders normalise by the guest size, so nothing else moves.
+ *   aspect ratio      the surfaces the title flips (its back buffers) are also
+ *                     widened to the ratio, and every vertex drawn into them is
+ *                     narrowed by 4:3 / ratio (push constant x3d): the picture
+ *                     keeps its proportions in the middle, the world's geometry
+ *                     past the original screen edges fills the sides (Hor+) and
+ *                     the HUD stays 4:3. Menus are presented 4:3 (the middle of
+ *                     the surface only); a ride is told from a menu by its draws
+ *                     into an off-screen render target (the 512x512 shadow /
+ *                     reflection map, only drawn in a ride -- in_ride()).
+ *                     Render targets that are only sampled keep their shape.
+ *   window mode       windowed, fullscreen or borderless on the chosen display;
+ *                     Alt+Enter / F11 toggle windowed <-> fullscreen.
+ *   frame rate        unlocked: the title's flips are not tied to the vblank
+ *                     (main.c clears RECOMP_FLIP_VSYNC); frame_pace() caps them.
  */
 #include "volk.h"
 #include <SDL.h>
 #include <SDL_vulkan.h>
 
 #include <pthread.h>
+#include <sched.h>
 #include <sys/resource.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -47,6 +68,7 @@ static const uint32_t k_vsh_spv[] =
 ;
 #include "keyboard_sdl.h"     /* xboxrecomp/src/input */
 #include "vk_backend.h"
+#include "settings/settings.h"
 
 #define VKB_MAX_SURFACES    16
 #define VKB_MAX_SWAP_IMAGES 8
@@ -59,8 +81,10 @@ static const uint32_t k_vsh_spv[] =
 /* A guest colour surface, as a GPU image. Keyed by guest address and size:
  * a title that reuses an address at another size gets a fresh image. */
 typedef struct {
-    uint32_t       va, width, height;
-    uint32_t       logical_w, logical_h;   /* width/aa_sx, height/aa_sy */
+    uint32_t       va, width, height;      /* width, height: the image (scaled) */
+    uint32_t       gw, gh;                 /* the guest surface's size */
+    uint32_t       logical_w, logical_h;   /* guest width/aa_sx, height/aa_sy */
+    int            wide;                   /* widened to the aspect ratio */
     VkImage        image;
     VkDeviceMemory memory;
     VkImageView    view;
@@ -115,6 +139,7 @@ typedef struct {
     float    z_scale;
     uint32_t flags;          /* 1 textured | 2 combiners | func<<8 | ref<<16
                               * | 1<<31 alpha test */
+    float    x3d;            /* NDC x factor for perspective vertices */
 } VkbPush;
 
 /* One batch's register-combiner state, std140, as nv2a.frag's RC block. */
@@ -180,6 +205,11 @@ static struct {
     VkbSurface        surfaces[VKB_MAX_SURFACES];
     VkbSurface       *last;                /* last surface cleared/drawn */
     uint32_t          flips;
+    uint32_t          scale;               /* resolution scale (settings) */
+    double            widen;               /* aspect ratio / (4/3), >= 1 */
+    uint32_t          shown_va[4];         /* surfaces the title has flipped */
+    uint32_t          rt_flip;             /* last flip with draws off screen, +1 */
+    VkPresentModeKHR  present_mode;
 
     VkFormat          depth_format;
     VkDescriptorSetLayout set_layout;
@@ -506,7 +536,8 @@ static void destroy_swapchain(void)
 
 /* The title paces itself on the emulated VBlank, so presentation must not
  * block the NV2A thread on the host's refresh: MAILBOX, else IMMEDIATE, else
- * FIFO (always available). */
+ * FIFO (always available). Unlocked at the display's refresh rate is the
+ * exception: FIFO is then the pacing (frame_pace for the other limits). */
 static int create_swapchain(void)
 {
     VkSurfaceCapabilitiesKHR caps;
@@ -532,6 +563,9 @@ static int create_swapchain(void)
         for (i = 0; i < nm; i++)
             if (modes[i] == VK_PRESENT_MODE_IMMEDIATE_KHR)
                 mode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+    if (g_amped2_settings.framerate == AMPED2_FPS_UNLOCKED && g_amped2_settings.frame_limit == 0)
+        mode = VK_PRESENT_MODE_FIFO_KHR;
+    V.present_mode = mode;
 
     SDL_Vulkan_GetDrawableSize(V.window, &w, &h);
     if (caps.currentExtent.width != UINT32_MAX) {
@@ -903,6 +937,81 @@ static int create_pipeline(void)
     return 1;
 }
 
+/* ---- window: mode, display, size (settings) --------------------------- */
+
+static int window_display(void)
+{
+    int n = SDL_GetNumVideoDisplays(), d = g_amped2_settings.display;
+    return (d >= 0 && d < n) ? d : 0;
+}
+
+/* The game window as the settings ask for it. Windowed: 2/3 of the display's
+ * height (at least 480) at the aspect ratio, centred on the chosen display. */
+static SDL_Window *open_window(const char *title)
+{
+    int d = window_display(), h = 960, w;
+    Uint32 flags = SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN;
+    SDL_DisplayMode dm;
+    SDL_Window *win;
+
+    if (SDL_GetDesktopDisplayMode(d, &dm) == 0 && dm.h > 0) {
+        h = dm.h * 2 / 3;
+        if (h < 480) h = 480;
+    }
+    w = (int)(h * amped2_aspect_value(g_amped2_settings.aspect_ratio) + 0.5);
+    if (g_amped2_settings.window_mode == AMPED2_FULLSCREEN && SDL_GetDesktopDisplayMode(d, &dm) == 0) {
+        w = dm.w;                          /* exclusive, at the desktop's mode */
+        h = dm.h;
+        flags |= SDL_WINDOW_FULLSCREEN;
+    } else if (g_amped2_settings.window_mode == AMPED2_BORDERLESS) {
+        flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+    }
+    win = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED_DISPLAY(d),
+                           SDL_WINDOWPOS_CENTERED_DISPLAY(d), w, h, flags);
+    if (win)
+        fprintf(stderr, "  [VK] window: %s on display %d (%s)\n",
+                g_amped2_settings.window_mode == AMPED2_FULLSCREEN ? "fullscreen"
+                : g_amped2_settings.window_mode == AMPED2_BORDERLESS ? "borderless" : "windowed",
+                d, SDL_GetDisplayName(d) ? SDL_GetDisplayName(d) : "?");
+    return win;
+}
+
+/* Alt+Enter / F11: windowed <-> the configured fullscreen mode (borderless if
+ * the setting is windowed). On the thread that owns the window. */
+static void toggle_fullscreen(void)
+{
+    Uint32 now = SDL_GetWindowFlags(V.window) & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP);
+    Uint32 to = 0;
+
+    if (!now)
+        to = g_amped2_settings.window_mode == AMPED2_FULLSCREEN ? SDL_WINDOW_FULLSCREEN
+                                                                : SDL_WINDOW_FULLSCREEN_DESKTOP;
+    if (to == SDL_WINDOW_FULLSCREEN) {
+        SDL_DisplayMode dm;
+        if (SDL_GetDesktopDisplayMode(SDL_GetWindowDisplayIndex(V.window), &dm) == 0)
+            SDL_SetWindowDisplayMode(V.window, &dm);
+    }
+    SDL_SetWindowFullscreen(V.window, to);
+    V.swap_dirty = 1;
+}
+
+/* Window events both pumps share; 1 if the event was a window hotkey (kept
+ * from the game: Enter is Start on the keyboard pad). */
+static int window_event(const SDL_Event *ev)
+{
+    if (ev->type == SDL_WINDOWEVENT
+            && (ev->window.event == SDL_WINDOWEVENT_SIZE_CHANGED
+                || ev->window.event == SDL_WINDOWEVENT_RESIZED))
+        V.swap_dirty = 1;
+    if (ev->type == SDL_KEYDOWN && !ev->key.repeat
+            && (ev->key.keysym.sym == SDLK_F11
+                || (ev->key.keysym.sym == SDLK_RETURN && (ev->key.keysym.mod & KMOD_ALT)))) {
+        toggle_fullscreen();
+        return 1;
+    }
+    return 0;
+}
+
 static int init_vulkan(void)
 {
     VkCommandPoolCreateInfo pci;
@@ -922,10 +1031,7 @@ static int init_vulkan(void)
             fprintf(stderr, "  [VK] SDL video: %s\n", SDL_GetError());
             return 0;
         }
-        V.window = SDL_CreateWindow("Amped 2 (Recomp, Vulkan)",
-                                    SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                    1280, 960,
-                                    SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN);
+        V.window = open_window("Amped 2 (Recomp, Vulkan)");
         if (!V.window) {
             fprintf(stderr, "  [VK] SDL_CreateWindow: %s\n", SDL_GetError());
             return 0;
@@ -965,6 +1071,14 @@ static int init_vulkan(void)
     sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
     VK_CHECK(vkCreateSemaphore(V.device, &sci, NULL, &V.sem_acquire));
 
+    V.scale = (uint32_t)g_amped2_settings.resolution_scale;
+    if (V.scale < 1 || V.scale > AMPED2_SCALE_MAX)
+        V.scale = 1;
+    V.widen = amped2_aspect_value(g_amped2_settings.aspect_ratio) / (4.0 / 3.0);
+    if (V.widen < 1.0)
+        V.widen = 1.0;
+    fprintf(stderr, "  [VK] internal resolution %ux, aspect ratio %s\n", V.scale,
+            amped2_aspect_name(g_amped2_settings.aspect_ratio));
     V.dump_prefix = getenv("AMPED2_VK_DUMP");
     e = getenv("AMPED2_VK_DUMP_EVERY");
     V.dump_every = e && atoi(e) > 0 ? (uint32_t)atoi(e) : 60;
@@ -1033,18 +1147,48 @@ static void surface_free(VkbSurface *s)
     memset(s, 0, sizeof *s);
 }
 
+/* Whether the title has flipped the surface at va: a back buffer, which gets
+ * the aspect ratio. Known from the first flip on; the first frames are drawn
+ * 4:3, then the surface is re-created wide (surface_get). */
+static int surface_shown(uint32_t va)
+{
+    int i;
+    for (i = 0; i < 4; i++)
+        if (V.shown_va[i] == va)
+            return 1;
+    return 0;
+}
+
+static void note_shown(uint32_t va)
+{
+    int i;
+    if (!va || surface_shown(va))
+        return;
+    for (i = 0; i < 4; i++)
+        if (!V.shown_va[i]) {
+            V.shown_va[i] = va;
+            return;
+        }
+}
+
 /* Evicting an image the frame being recorded still references would free it
  * under the command buffer, so only images unused this frame are candidates;
  * a full cache of in-use images fails the request (logged once). */
 static VkbSurface *surface_get(const Nv2aSurface *g)
 {
     VkbSurface *s, *victim = NULL;
-    int i;
+    int i, wide = V.widen > 1.0 && surface_shown(g->color_va);
 
     for (i = 0; i < VKB_MAX_SURFACES; i++) {
         s = &V.surfaces[i];
-        if (s->image && s->va == g->color_va
-                && s->width == g->width && s->height == g->height) {
+        if (s->image && s->va == g->color_va && s->gw == g->width && s->gh == g->height) {
+            if (s->wide != wide && s->last_used != V.flips) {
+                /* Became a back buffer: re-create it wide (below). */
+                vkDeviceWaitIdle(V.device);
+                if (V.last == s) V.last = NULL;
+                surface_free(s);
+                break;
+            }
             s->last_used = V.flips;
             return s;
         }
@@ -1067,7 +1211,14 @@ static VkbSurface *surface_get(const Nv2aSurface *g)
         surface_free(victim);
     }
     s = victim;
-    if (!image_create(g->width, g->height, VK_FORMAT_B8G8R8A8_UNORM,
+    s->gw = g->width;
+    s->gh = g->height;
+    s->wide = wide;
+    s->width = g->width * V.scale;
+    s->height = g->height * V.scale;
+    if (wide)
+        s->width = (uint32_t)((double)s->width * V.widen + 0.5) & ~1u;
+    if (!image_create(s->width, s->height, VK_FORMAT_B8G8R8A8_UNORM,
                       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT
                       | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                       VK_IMAGE_ASPECT_COLOR_BIT, &s->image, &s->memory, &s->view)) {
@@ -1075,14 +1226,13 @@ static VkbSurface *surface_get(const Nv2aSurface *g)
         return NULL;
     }
     s->va = g->color_va;
-    s->width = g->width;
-    s->height = g->height;
     s->logical_w = g->width / (g->aa_sx ? g->aa_sx : 1);
     s->logical_h = g->height / (g->aa_sy ? g->aa_sy : 1);
     s->layout = VK_IMAGE_LAYOUT_UNDEFINED;
     s->last_used = V.flips;
-    fprintf(stderr, "  [VK] surface 0x%08X %ux%u (logical %ux%u)\n",
-            s->va, s->width, s->height, s->logical_w, s->logical_h);
+    fprintf(stderr, "  [VK] surface 0x%08X %ux%u (logical %ux%u) as %ux%u%s\n",
+            s->va, s->gw, s->gh, s->logical_w, s->logical_h, s->width, s->height,
+            s->wide ? ", widened" : "");
     return s;
 }
 
@@ -1882,6 +2032,8 @@ static int draw_prepare(const Nv2aSurface *g, const Nv2aBatch *b, VkbDrawCtx *c)
         return 0;
     V.last = c->s;
     V.frame_draws++;
+    if (V.shown_va[0] && !surface_shown(c->s->va))
+        V.rt_flip = V.flips + 1;            /* off screen (in_ride) */
     if (!(c->d = depth_get(b->state->zeta_va, c->s->width, c->s->height)))
         return 0;
 
@@ -1939,8 +2091,10 @@ static void draw_frag_state(const Nv2aBatch *b, VkbDrawCtx *c)
     c->w[VKB_BIND_RC].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     c->w[VKB_BIND_RC].pBufferInfo = &c->dbi[0];
 
-    c->pc.surface_size[0] = (float)c->s->width;
-    c->pc.surface_size[1] = (float)c->s->height;
+    /* Vertices are in guest surface pixels, whatever size the image has. */
+    c->pc.surface_size[0] = (float)c->s->gw;
+    c->pc.surface_size[1] = (float)c->s->gh;
+    c->pc.x3d = c->s->wide ? (float)(1.0 / V.widen) : 1.0f;
     c->pc.tex_size[0] = (!c->use_rc && c->views[0]) ? (float)b->texture->width : 1.0f;
     c->pc.tex_size[1] = (!c->use_rc && c->views[0]) ? (float)b->texture->height : 1.0f;
     c->pc.z_scale = 1.0f / 16777215.0f;
@@ -2139,12 +2293,18 @@ static void pump_events(void)
             fflush(stderr);
             _Exit(0);
         }
-        if (ev.type == SDL_WINDOWEVENT
-                && (ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED
-                    || ev.window.event == SDL_WINDOWEVENT_RESIZED))
-            V.swap_dirty = 1;
-        xbox_InputSdlEvent(&ev);
+        if (!window_event(&ev))
+            xbox_InputSdlEvent(&ev);
     }
+}
+
+/* A ride, not a menu: something was drawn into an off-screen render target
+ * in the last half second of flips. Amped 2 renders its 512x512 target only
+ * on the mountain (checked: created after the level loads, never in the
+ * menus). Decides how a widened back buffer is presented. */
+static int in_ride(void)
+{
+    return V.rt_flip && V.flips + 1 - V.rt_flip < 30;
 }
 
 /* The logical (title-visible) size of the surface, scaled to fit the window
@@ -2152,7 +2312,8 @@ static void pump_events(void)
 static void fit_rect(const VkbSurface *s, VkOffset3D out[2])
 {
     double sw = (double)V.swap_extent.width, sh = (double)V.swap_extent.height;
-    double aspect = (double)s->logical_w / (double)s->logical_h;
+    double aspect = (double)s->logical_w / (double)s->logical_h
+                  * (s->wide && in_ride() ? V.widen : 1.0);
     double w = sw, h = sw / aspect;
 
     if (h > sh) { h = sh; w = sh * aspect; }
@@ -2183,6 +2344,13 @@ static void update_title(void)
         /* The same figure in the log every 5 s, for runs nobody watches. */
         static uint32_t logged;
         if (now - logged >= 5000) {
+            if (getenv("AMPED2_TIME_TRACE")) {
+                /* The game's clock (accumulated frame time x 30, at 0x3AD0C4,
+                 * see docs/notes.md): ~30 ticks per second at any frame rate. */
+                const uint8_t *m = (const uint8_t *)xbox_GetMemoryOffset();
+                fprintf(stderr, "  [TT] wall %u ms flips %u ticks30 %d\n", now, V.flips,
+                        *(const int32_t *)(m + 0x3AD0C4));
+            }
             fprintf(stderr, "  [VK] %s | decodes/5s: %u (%u new, %.1f Mtexels) | hashed: %u, %.1f MB\n",
                     tb + sizeof "Amped 2 (Recomp, Vulkan) | " - 1, V.stat_decodes,
                     V.stat_new, (double)V.stat_decode_px / 1e6, V.stat_hashes,
@@ -2280,6 +2448,31 @@ static int overlay_record(VkImage img)
     return 1;
 }
 
+/* Unlocked with a fixed limit: hold the flip until its slot. Sleeps for the
+ * bulk and spins the last ~1 ms (a plain sleep overshoots by up to a
+ * scheduler tick, which shows as uneven frames at 240+ fps). After a stall
+ * the schedule restarts instead of rushing to catch up. */
+static void frame_pace(void)
+{
+    static uint64_t next;
+    uint64_t freq = SDL_GetPerformanceFrequency(), now = SDL_GetPerformanceCounter(), period;
+    int fps = g_amped2_settings.frame_limit;
+
+    if (g_amped2_settings.framerate != AMPED2_FPS_UNLOCKED || fps <= 0)
+        return;
+    period = freq / (uint64_t)fps;
+    if (!next || now > next + 2 * period)
+        next = now;
+    next += period;
+    while ((now = SDL_GetPerformanceCounter()) < next) {
+        uint64_t left_us = (next - now) * 1000000u / freq;
+        if (left_us > 1500)
+            SDL_Delay((Uint32)((left_us - 1000) / 1000));
+        else
+            sched_yield();
+    }
+}
+
 /* Present the current picture. real_flip: the title flipped (count it, log
  * it, dump it); otherwise a present for a new overlay frame between flips. */
 static void present(int real_flip)
@@ -2300,8 +2493,11 @@ static void present(int real_flip)
         pump_events();
         update_title();
     }
-    if (real_flip)
+    if (real_flip) {
         V.flips++;
+        if (V.last)
+            note_shown(V.last->va);
+    }
     if (real_flip && (V.flips == 1 || (V.frame_draws && !V.first_draw_logged))) {
         /* Boot time to the first flip and the first frame with draws. */
         fprintf(stderr, "  [VK] %s at %.1f s (flip %u)\n",
@@ -2362,6 +2558,20 @@ static void present(int real_flip)
         blit.srcOffsets[1].x = (int32_t)s->width;
         blit.srcOffsets[1].y = (int32_t)s->height;
         blit.srcOffsets[1].z = 1;
+        if (s->wide && real_flip) {
+            static int was = -1;
+            if (was != in_ride()) {
+                was = in_ride();
+                fprintf(stderr, "  [VK] flip %u: presenting %s\n", V.flips,
+                        was ? "wide (ride)" : "4:3 (menu)");
+            }
+        }
+        if (s->wide && !in_ride()) {
+            /* A menu on a widened surface: its 4:3 middle. */
+            int32_t w43 = (int32_t)((double)s->width / V.widen + 0.5);
+            blit.srcOffsets[0].x = ((int32_t)s->width - w43) / 2;
+            blit.srcOffsets[1].x = blit.srcOffsets[0].x + w43;
+        }
         blit.dstSubresource = blit.srcSubresource;
         fit_rect(s, blit.dstOffsets);
         surface_to(s, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
@@ -2388,6 +2598,8 @@ static void present(int real_flip)
         fprintf(stderr, "  [VK] submit failed\n");
         return;
     }
+    if (real_flip)
+        frame_pace();
     memset(&pi, 0, sizeof pi);
     pi.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     pi.waitSemaphoreCount = 1;
@@ -2471,10 +2683,7 @@ int amped2_vk_host_main(int (*guest_main)(void))
                 SDL_GetError());
         return guest_main();
     }
-    V.window = SDL_CreateWindow("Amped 2 (Recomp, Vulkan) | loading",
-                                SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                1280, 960,
-                                SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN);
+    V.window = open_window("Amped 2 (Recomp, Vulkan) | loading");
     s_guest_done_event = SDL_RegisterEvents(1);
     if (!V.window || s_guest_done_event == (Uint32)-1) {
         fprintf(stderr, "  [VK] window: %s; running without a window thread\n",
@@ -2510,11 +2719,8 @@ int amped2_vk_host_main(int (*guest_main)(void))
                     fflush(stderr);
                     _Exit(0);
                 }
-                if (ev.type == SDL_WINDOWEVENT
-                        && (ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED
-                            || ev.window.event == SDL_WINDOWEVENT_RESIZED))
-                    V.swap_dirty = 1;
-                xbox_InputSdlEvent(&ev);
+                if (!window_event(&ev))
+                    xbox_InputSdlEvent(&ev);
             } while (SDL_PollEvent(&ev));
         }
         if (V.flips)

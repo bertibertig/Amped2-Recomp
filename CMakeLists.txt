@@ -61,6 +61,8 @@ file(GLOB RECOMP_GEN_SOURCES CONFIGURE_DEPENDS "src/recomp/gen/*.c")
 set(GAME_SOURCES
     src/main.c
     src/recomp_manual.c
+    src/settings/settings.c       # graphics settings file
+    src/settings/settings_tui.c   # --settings: the settings screen in the terminal
     # Add game-specific sources here, e.g.:
     # src/asset_loader.c
     # src/custom_renderer.c

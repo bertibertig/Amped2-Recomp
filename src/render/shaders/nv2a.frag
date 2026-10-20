@@ -47,6 +47,7 @@ layout(push_constant) uniform PC {
     float z_scale;
     uint  flags;          // bit 0 stage 0 textured, bit 1 combiners,
                           // 8-10 alpha func, 16-23 ref, 31 alpha test on
+    float x3d;            // vertex stages only (aspect ratio)
 } pc;
 
 layout(location = 0) out vec4 o_color;
