@@ -67,7 +67,13 @@
 - [ ] Windows under Wine/Proton: movies stay black (video overlay in the D3D11/CPU window path) and no music
       (sound effects play) – recheck with the dispatch lock (the Linux music dropout was a DPC race, which a
       ~2-6 fps software-rendered run hits all the more)
-- [ ] Windows: test on real Windows 10/11
+- [ ] Windows: test on real Windows 10/11 – `run.bat` and the new `run.ps1` (v0.2.0; `run.ps1` only checked with
+      PowerShell 7 on Linux against a stand-in binary)
+- [ ] Windows: `--settings` TUI does not show – amped2_recomp.exe is a GUI-subsystem program, so it has no console
+      for the settings screen (AttachConsole/AllocConsole when `--settings` is given, or a console build); run.bat /
+      run.ps1 also redirect its output to run.log. The settings are Vulkan-only anyway until the Windows Vulkan port
+- [ ] Windows under Wine/Proton: check by ear whether the music plays now (v0.2.0 test: the APU's WAV tap is not
+      silent, but that is not what XAudio2 plays)
 - [ ] Software renderer: stray triangles stretched out from trees/objects (seen on Windows; check
       `AMPED2_RENDERER=cpu` on Linux)
 - [ ] Steam Deck test, macOS

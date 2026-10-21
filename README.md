@@ -29,7 +29,8 @@ It follows the same route as SSX3-Recomp (our SSX 3 port with the same toolkit):
 | Riding (Millicent 1): HUD, challenge cards, goals board, ~55 fps on Vulkan | ✅ |
 | Graphics settings: resolution 1x-5x, 4:3 / 16:9 / 16:10 / 21:9, unlocked frame rate, window modes (TUI) | ✅ |
 | Rider shadow, steady 60 fps | ⬜ |
-| First release: [v0.1.0](https://github.com/bertibertig/Amped2-Recomp/releases) (Linux x86-64) | ✅ |
+| Music without dropouts (DirectSound DPC race fixed), proper stereo downmix | ✅ |
+| Releases: [v0.1.0, v0.2.0](https://github.com/bertibertig/Amped2-Recomp/releases) (Linux x86-64, Windows preview) | ✅ |
 | Windows build (MinGW): boots, menus and a ride under Wine/Proton, software renderer only (~2-6 fps) | 🟡 |
 
 Plan and open items: [docs/TODO.md](docs/TODO.md), running log: [docs/notes.md](docs/notes.md).
@@ -39,13 +40,16 @@ Plan and open items: [docs/TODO.md](docs/TODO.md), running log: [docs/notes.md](
 1. Download the package for your system from the [releases page](https://github.com/bertibertig/Amped2-Recomp/releases)
    and unpack it.
 2. Put **your own** game files into its `game_files/` folder – see [Preparing the game files](#preparing-the-game-files).
-3. Start it with `./run.sh` (Linux) or by double-clicking `run.bat` (Windows; console output in `run.log`).
+3. Start it with `./run.sh` (Linux; `./run.sh --settings` for the graphics settings) or on Windows by
+   double-clicking `run.bat` or with `run.ps1` (right-click → *Run with PowerShell*, or
+   `powershell -ExecutionPolicy Bypass -File .\run.ps1`); on Windows the console output goes to `run.log`.
 
 Needs glibc 2.39 or newer (Ubuntu 24.04+, Fedora 40+, Arch, SteamOS 3.6+), SDL2 and a Vulkan driver
 (`sudo apt install libsdl2-2.0-0 libvulkan1 mesa-vulkan-drivers`).
 
 **Windows (10/11) is experimental and not playable yet**: software renderer only (about 4-6 fps in the menus, 2 fps
-on the slope), so far only tested under Wine and Proton, where the movies stay black and the music is missing.
+on the slope), no graphics settings yet (`--settings` does not work there), so far only tested under Wine and Proton, where the
+movies stay black and the music may be missing.
 
 ## Preparing the game files
 
@@ -64,14 +68,14 @@ Supported is the **PAL/EU version** (title ID 4D530041, `default.xbe` SHA-1
 
    or `xdvdfs unpack "Amped 2.iso" game_files`. Already have an extracted disc folder? Copy its contents instead.
 3. **Put it in the right place**: a folder named `game_files`
-   - **release package**: next to `run.sh` / `run.bat` in the unpacked package folder;
+   - **release package**: next to `run.sh` / `run.bat` / `run.ps1` in the unpacked package folder;
    - **build from source**: in the repository root (`scripts/extract_iso.sh <image.iso | folder>` does steps 2–3).
 4. **Check the layout**: `default.xbe` must sit directly in `game_files/`, not in a subfolder (no
    `game_files/Amped 2/default.xbe`). The whole disc is about 4 GB; keep every file and folder as extracted (the
    letter case of the names does not matter).
 
 ```text
-Amped2-Recomp-v0.1.0-linux-x86_64/
+Amped2-Recomp-v0.2.0-linux-x86_64/
 ├── amped2_recomp
 ├── run.sh
 └── game_files/
@@ -82,7 +86,7 @@ Amped2-Recomp-v0.1.0-linux-x86_64/
     └── … (the rest of the disc)
 ```
 
-Without `game_files/default.xbe`, `./run.sh` (`run.bat`) stops with a message telling you where the files belong.
+Without `game_files/default.xbe`, `./run.sh` (`run.bat`, `run.ps1`) stops with a message telling you where the files belong.
 Saves and the game's cache go to `~/.local/share/xboxrecomp` (Windows: `%LOCALAPPDATA%\xboxrecomp`), not into
 `game_files/`.
 

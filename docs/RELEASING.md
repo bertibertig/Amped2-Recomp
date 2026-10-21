@@ -5,10 +5,12 @@ Same scheme as SSX3-Recomp's `docs/RELEASING.md`.
 
 ## Hard rules
 - **Never upload game data**: no XBE, ISO, `game_files/` content or generated code (`src/recomp/gen/`) – not in the
-  repo, not as a release asset. Packages hold only our binary, `run.sh`, READMEs and licenses
+  repo, not as a release asset. Packages hold only our binary, the launchers (`run.sh`; Windows: `run.bat`,
+  `run.ps1`), READMEs and licenses
   (`scripts/package_release.sh` builds exactly that; check the listing anyway).
-- Players start the game with `run.sh` (release-package mode: binary, `run.sh` and `game_files/` side by side), so
-  the release notes and the test use that, never the bare binary.
+- Players start the game with `run.sh` (release-package mode: binary, `run.sh` and `game_files/` side by side) or,
+  on Windows, `run.bat` / `run.ps1` (same defaults – keep the three in sync), so the release notes and the tests use
+  those, never the bare binary.
 
 ## Preconditions
 - Branch `main`, clean tree, not behind `origin/main`.
@@ -52,7 +54,8 @@ scripts/test_release.sh <version> > logs/test-release-<version>.log 2>&1   # bac
 cat logs/release-test-<version>/summary.txt
 ```
 
-It unpacks the package like a player, checks the missing-game-files message, links the disc files into its
+It unpacks the package like a player, runs with default graphics settings (`AMPED2_SETTINGS` points to a missing
+file in the test folder, so the developer's own `~/.config/amped2-recomp/settings.ini` does not count), checks the missing-game-files message, links the disc files into its
 `game_files/`, starts `./run.sh` with default settings (intro plays) and drives intro → legal → title →
 Choose a Look → main menu → Career → Millicent 1 → challenge card → goals board → ride with the emulated pad
 (`RECOMP_PAD_LIVE`, no window focus needed), with Vulkan frame dumps. Look at

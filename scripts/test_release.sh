@@ -7,6 +7,8 @@
 # Choose a Look) -> A (main menu: Career -> RIDE!, Millicent 1) -> A x3 (level, challenge card, goals board) -> ride,
 # then accelerate and steer. Presses go through RECOMP_PAD_LIVE (as scripts/press.sh), no window focus needed.
 #   RUN_SECS=<n>   how long the game runs (default 150)
+#   AMPED2_SETTINGS=<file>   graphics settings to test with (default: none in the test folder = the defaults, so a
+#                  player's own ~/.config/amped2-recomp/settings.ini does not change the result)
 source "$(dirname "$0")/_common.sh"
 VERSION="${1:?Usage: scripts/test_release.sh <version, e.g. v0.1.0>}"
 ARCHIVE="$ROOT/dist/Amped2-Recomp-$VERSION-linux-x86_64.tar.gz"
@@ -36,6 +38,8 @@ PAD="$OUT/pad_live.txt"
 SCRIPT=(28 start  34 start  40 start  46 start  52 start  58 a  64 a  76 a  82 a  88 a  96 a:3000
         100 lleft:1500  102 a:4000  107 lright:1500  110 a:4000)
 set +e
+export AMPED2_SETTINGS="${AMPED2_SETTINGS:-$OUT/settings.ini}"
+say "  settings: $AMPED2_SETTINGS$([ -f "$AMPED2_SETTINGS" ] || echo ' (missing = defaults)')"
 (cd "$P" && RECOMP_PAD_LIVE="$PAD" AMPED2_VK_DUMP="$OUT/dumps/f" AMPED2_VK_DUMP_EVERY=240 \
    timeout -k 10 -s INT "$RUN_SECS" ./run.sh) > "$OUT/linux.log" 2>&1 &
 GAME=$!

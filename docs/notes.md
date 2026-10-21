@@ -510,3 +510,21 @@ _(date – what was done, what was found, next step)_
     cause (state written to the wrong voice) but it was not reproduced before the fix either, so keep watching.
   - MinGW cross build links; `scripts/ci.sh` 2/2. Likely relevant to SSX3-Recomp too (same runtime and XDK
     DirectSound) – to be ported back there and checked.
+- 2026-10-21 – **Release v0.2.0 (Linux x86-64 + Windows preview).** Graphics settings, music dropout fix, stereo
+  downmix, `run.ps1`.
+  - New `scripts/release/run.ps1` in the Windows package: PowerShell port of `run.sh`/`run.bat` (same defaults as
+    `run.bat` incl. `RECOMP_WIN_PLACEHOLDER=1`, missing-files message, args passed on, stdout+stderr to `run.log` as
+    UTF-8 via a StreamWriter – Tee-Object writes UTF-16 in PS 5.1 – last 15 lines shown on a non-zero exit, pause
+    when interactive). Checked with pwsh 7 on Linux against a stand-in binary only; untested on real Windows.
+  - `scripts/test_release.sh` now points `AMPED2_SETTINGS` at a missing file in the test folder: the first v0.2.0 run
+    had picked up the developer's `~/.config/amped2-recomp/settings.ini` (3x, 16:9, unlocked, fullscreen). That run
+    still reached the ride (60-70 fps with dumps, dips to ~22-35).
+  - Linux package (container build): highest GLIBC_2.38; NEEDED libSDL2, libc, libm. `test_release.sh v0.2.0` with
+    defaults: missing-files message ok; intro → legal → main menu → Career → Millicent 1 → Media Challenge →
+    goals board → ride with rider and HUD, 55-60 fps, still running at 150 s. RTX 2080 Ti, NVIDIA driver.
+  - Windows package: imports d3d11, D3DCOMPILER_47, XAudio2_8, XINPUT1_4, MFPlat/MFReadWrite, UCRT. Wine 11.20, fresh
+    prefix, `run.bat`, 600 s: missing-files message ok; Choose a Look → Enter Name → new profile → main menu →
+    Millicent 1 → ride; no crash (exit 0xC000013A = the time limit's Ctrl+C), stray triangles as in v0.1.0. The
+    APU's WAV tap is not silent, but the music was not checked by ear. Proton skipped for this release (user).
+  - Known Windows issues listed, not fixed (user's call for this release): `--settings` TUI cannot show (GUI-subsystem
+    exe, no console), black movies, maybe no music under Wine/Proton – in TODO.

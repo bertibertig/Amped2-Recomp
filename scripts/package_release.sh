@@ -43,10 +43,10 @@ if [ "${SKIP_WINDOWS:-0}" != 1 ]; then
   JOBS="$JOBS" "$ROOT/scripts/build_win.sh"
   PKG="$DIST/Amped2-Recomp-$VERSION-windows-x86_64"
   rm -rf "$PKG"; mkdir -p "$PKG"
-  cp "$ROOT/build-win/amped2_recomp.exe" "$ROOT/scripts/release/run.bat" "$PKG/"
+  cp "$ROOT/build-win/amped2_recomp.exe" "$ROOT/scripts/release/run.bat" "$ROOT/scripts/release/run.ps1" "$PKG/"
   common_files "$PKG"
   # Windows line endings for the text files people open in Notepad
-  for f in "$PKG"/*.txt "$PKG"/licenses/*.txt "$PKG"/game_files/*.txt "$PKG"/run.bat; do sed -i 's/\r*$/\r/' "$f"; done
+  for f in "$PKG"/*.txt "$PKG"/licenses/*.txt "$PKG"/game_files/*.txt "$PKG"/run.bat "$PKG"/run.ps1; do sed -i 's/\r*$/\r/' "$f"; done
   (cd "$DIST" && rm -f "$(basename "$PKG").zip" && zip -qr "$(basename "$PKG").zip" "$(basename "$PKG")")
   echo "Windows package: $PKG.zip"
 fi
