@@ -528,3 +528,34 @@ _(date – what was done, what was found, next step)_
     APU's WAV tap is not silent, but the music was not checked by ear. Proton skipped for this release (user).
   - Known Windows issues listed, not fixed (user's call for this release): `--settings` TUI cannot show (GUI-subsystem
     exe, no console), black movies, maybe no music under Wine/Proton – in TODO.
+- 2026-10-21 – **Results-screen lag fixed (APU idle-voice traps round-robin); CRT x87 helpers seeded.** User report:
+  lag spikes on the results screen after a run (3x, 16:9, unlocked = display refresh, fullscreen); smooth again after
+  Continue. Also a crash yesterday after pressing LB (White = next music track) on the slope; fine today.
+  - Reproduced windowed: results screen 5-45 fps (ride 55-60). perf (`-e cpu-clock:u --user-callchains -g`, works on
+    a child process with perf_event_paranoid=2; attaching does not, nor does gdb with ptrace_scope=1): on the results
+    screen the game thread spends ~1/3 of its time in KeQuerySystemTime/QPC/GetTickCount via DirectSound's
+    `sub_00295E10` – the stop-wait loop `0x00296A78` (`while (voice->flags & 0x8000) check()`); `check` forces the
+    voice off only after a 0.5 s timeout (0x4C4B40 x 100 ns).
+  - `RECOMP_APU_TRACE` `[APU-IRQ]`: ride ~1 idle-voice trap per 5 s, results screen ~7500 per 5 s = one per APU frame.
+    New `RECOMP_APU_IDLE_LOG=1`: all of them v72. DirectSound's ISR (0x00293EF2 → 0x00293D39 → 0x00293CB8 →
+    0x002936B5) acks and resumes but ignores the trap: v72's buffer object (core = KINTERRUPT ServiceContext at
+    0x0029C0AC, voices at core+0x88) has v73 in its current slot (handle 0x49), and it is retired through that one.
+    The runtime raised one idle trap at a time, always for the first idle voice in list order: v72 every frame, v73
+    never, and no other stopped voice either – every DirectSound stop waited out its 0.5 s timeout.
+    (First guess, PERSIST bit 23 of CFG_FMT, disproved: v72's fmt 5903E0E6 has it clear.)
+  - Fix (runtime, `apu_vp.c`): idle voices are reported round-robin – the first idle voice after the one reported last,
+    still one trap per frame. Results screen: idle traps back to single digits per 5 s, 55-60 fps (user confirmed).
+  - Seeds `0x00282B68`, `0x00282C0A` (17 seeds now): MSVC CRT x87 special-case tails in the transcendental dispatch
+    table at 0x00388BC8 (next to the "acos" name), the only two entries of it missing from the dispatch table (scan of
+    the whole .rdata for 0x0027F000-0x00286000 targets). 0x00282C0A failed as an ICALL ~60x/s all ride (18 lines of
+    stderr each) – the call was skipped, i.e. the FPU stack kept two operands instead of the special-case result.
+    After the pipeline run: 0 ICALL failures.
+  - New `AMPED2_STALL_MS=<ms>` (src/main.c, our host code): when no flip came for that long, the game thread's host
+    stack is sampled every 50 ms (`[STALL]` + backtrace_symbols; resolve offsets with addr2line). Clean ride with the
+    fix: 59-60 fps throughout, stalls only while loading (zip reads, 250-570 ms).
+  - Ride dips seen in the test runs (4-20 fps, music garbled after them – user heard it) came with the pipeline,
+    compiles, perf or `RECOMP_APU_TRACE` running next to the game; the clean run had none. A starved APU/game thread
+    starves the music stream, as in the dropout bug.
+  - LB/White crash: not reproduced – a ride with White (next track) every 16 s ran to the timeout. The v0.2.0 release
+    (dispatch-lock fix for the DPC race, which caused the earlier crash in `sub_001772F0`) was built 2026-10-21 02:51;
+    a test "yesterday" may still have been an older build. Keep watching.

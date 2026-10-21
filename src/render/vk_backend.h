@@ -19,4 +19,8 @@ int amped2_vk_register(void);
  * window stays responsive through the load. Returns guest_main's result. */
 int amped2_vk_host_main(int (*guest_main)(void));
 
+/* Flips presented so far (the title's, not idle overlay presents); read by
+ * the stall sampler in main.c. */
+extern volatile unsigned amped2_vk_flip_count;
+
 #endif /* AMPED2_VK_BACKEND_H */

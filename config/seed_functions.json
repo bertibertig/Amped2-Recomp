@@ -73,5 +73,15 @@
   "start": "0x0024F240",
   "observed": true,
   "note": "Indirect-call target observed at runtime (entering a ride); vtable entry at 0x0036E638; decodes as a function body."
+ },
+ {
+  "start": "0x00282B68",
+  "observed": true,
+  "note": "MSVC CRT x87 special-case tail (pop both, fldz) in the transcendental dispatch table at 0x388BC8 (data reference only)."
+ },
+ {
+  "start": "0x00282C0A",
+  "observed": true,
+  "note": "MSVC CRT x87 special-case tail (pop both, load the default result from 0x373B04) in the dispatch table at 0x388BC8; ICALL seen thousands of times per ride."
  }
 ]

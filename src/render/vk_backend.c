@@ -2302,6 +2302,8 @@ static void pump_events(void)
  * in the last half second of flips. Amped 2 renders its 512x512 target only
  * on the mountain (checked: created after the level loads, never in the
  * menus). Decides how a widened back buffer is presented. */
+volatile unsigned amped2_vk_flip_count;
+
 static int in_ride(void)
 {
     return V.rt_flip && V.flips + 1 - V.rt_flip < 30;
@@ -2495,6 +2497,7 @@ static void present(int real_flip)
     }
     if (real_flip) {
         V.flips++;
+        amped2_vk_flip_count = V.flips;
         if (V.last)
             note_shown(V.last->va);
     }

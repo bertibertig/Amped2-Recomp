@@ -23,6 +23,11 @@
 - [x] **Music bug** (user report, 2026-10-20): music stopped, came back quiet/crackling, no next track, static, crash –
       DirectSound's stream DPC raced game threads at DISPATCH_LEVEL (runtime dispatch lock); stereo downmix of the
       speaker bins fixed the left/right imbalance and clipping (see notes 2026-10-21)
+- [x] **Results-screen lag** (user report, 2026-10-21): DirectSound waited 0.5 s per stopped voice – the runtime
+      always reported the same idle voice (v72) and never the one DirectSound retires the buffer through (v73);
+      idle-voice traps are round-robin now (see notes 2026-10-21)
+- [ ] LB/White (next music track) crash on the slope, reported once (2026-10-20, maybe a pre-v0.2.0 build) – not
+      reproduced with White every 16 s through a ride
 - [ ] 5.1 multichannel audio: XMV/DirectSound set up 6 mix bins; the APU output is mixed down to stereo (ITU-style
       downmix of bins 0..9 now); real 5.1 needs a 6-channel host device and XC_AUDIO surround
 - [ ] GP/EP DSP: effect sends (I3DL2 bin 10, FX sends 11..31) are added dry; the title's DSP image (yetidsp.bin)

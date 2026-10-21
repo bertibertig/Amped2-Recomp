@@ -57,6 +57,7 @@
 #define HAVE_BACKTRACE 1
 #endif
 #endif
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -421,6 +422,90 @@ static void posix_fault_handler(int sig, siginfo_t *si, void *ucv)
     raise(sig);
 }
 
+/* Stall sampler (AMPED2_STALL_MS=<ms>, Vulkan renderer, POSIX): when no flip
+ * has been presented for that long, the guest thread's host stack is sampled
+ * every 50 ms until the next flip -- "[STALL]" lines with backtrace_symbols
+ * output (binary+offset; resolve with addr2line -f -e build/amped2_recomp).
+ * Generated functions have no frame pointers but do have unwind tables, so
+ * backtrace() walks through them. Answers "where is the game during a lag
+ * spike" without a profiler (perf_event_paranoid) or a debugger (every MMIO
+ * access is a SIGSEGV, which a tracer would have to pass on). */
+#if defined(HAVE_BACKTRACE) && defined(AMPED2_HAVE_VULKAN)
+#include <pthread.h>
+#include <time.h>
+#define STALL_SIGNAL (SIGRTMIN + 3)
+static pthread_t s_guest_thread;
+static volatile int s_stall_on;
+
+static void stall_sample_handler(int sig)
+{
+    void *frames[24];
+    int n, saved = errno;
+
+    (void)sig;
+    n = backtrace(frames, 24);
+    write(STDERR_FILENO, "[STALL] guest thread:\n", 22);
+    backtrace_symbols_fd(frames + 1, n - 1, STDERR_FILENO);
+    errno = saved;
+}
+
+static void *stall_sampler(void *arg)
+{
+    int limit_ms = (int)(intptr_t)arg;
+    unsigned last = amped2_vk_flip_count;
+    struct timespec t_last, now, nap = { 0, 10 * 1000000L };
+    long since_sample = 0;
+
+    clock_gettime(CLOCK_MONOTONIC, &t_last);
+    for (;;) {
+        unsigned f;
+        long ms;
+
+        nanosleep(&nap, NULL);
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        f = amped2_vk_flip_count;
+        ms = (now.tv_sec - t_last.tv_sec) * 1000 + (now.tv_nsec - t_last.tv_nsec) / 1000000;
+        if (f != last) {
+            if (ms >= limit_ms)
+                fprintf(stderr, "[STALL] ended: flip %u came %ld ms after flip %u\n",
+                        f, ms, last);
+            last = f;
+            t_last = now;
+            since_sample = 0;
+            continue;
+        }
+        if (f == 0 || ms < limit_ms)            /* not booted yet / no stall */
+            continue;
+        if (since_sample == 0 || ms - since_sample >= 50) {
+            fprintf(stderr, "[STALL] %ld ms since flip %u\n", ms, f);
+            pthread_kill(s_guest_thread, STALL_SIGNAL);
+            since_sample = ms;
+        }
+    }
+    return NULL;
+}
+
+/* Call from the thread that runs guest code. */
+static void stall_sampler_start(void)
+{
+    const char *e = getenv("AMPED2_STALL_MS");
+    pthread_t t;
+    int ms = e ? atoi(e) : 0;
+
+    if (ms <= 0)
+        return;
+    s_guest_thread = pthread_self();
+    signal(STALL_SIGNAL, stall_sample_handler);
+    if (pthread_create(&t, NULL, stall_sampler, (void *)(intptr_t)ms) == 0) {
+        pthread_detach(t);
+        s_stall_on = 1;
+        fprintf(stderr, "[STALL] sampler on: guest stack when no flip for %d ms\n", ms);
+    }
+}
+#else
+static void stall_sampler_start(void) {}
+#endif
+
 static void install_posix_fault_handler(void)
 {
     /* An alternate stack, so a guest stack overflow that runs the host stack
@@ -444,6 +529,9 @@ static void install_posix_fault_handler(void)
     sigaction(SIGBUS, &sa, NULL);   /* macOS reports a protected page so */
 }
 #endif /* _WIN32 */
+#ifdef _WIN32
+static void stall_sampler_start(void) {}   /* AMPED2_STALL_MS: POSIX only */
+#endif
 
 /* ── Boot sequence (shared by every host) ──────────────────── */
 
@@ -630,6 +718,7 @@ static int boot_and_run(void)
      * silently inert, and the one diagnostic that tells a hang from slowness
      * does nothing while appearing to be set. */
     xbox_WatchdogStart();
+    stall_sampler_start();
 
     /* Step 7: Call the recompiled entry point */
     printf("\nStarting game...\n");

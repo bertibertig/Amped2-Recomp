@@ -123,6 +123,12 @@ All of them are candidates for an upstream PR to sp00nznet/xboxrecomp.
   samples the mixdown clamped) every second; `RECOMP_APU_TRACE_NO_MMIO=1` keeps those without the per-access register
   log; `RECOMP_APU_SSL_LOG=1` logs every stream list set/done/starve with a timestamp; `RECOMP_APU_VOICE_LOG=<voice>`
   logs every front-end method naming that voice (with the writer's guest stack for volume writes).
+- `apu_vp.c`: **idle-voice traps round-robin** – one SE2FE_IDLE_VOICE trap per frame as before, but for the first
+  idle voice *after* the one reported last instead of always the first in list order. DirectSound (XDK 5558) retires
+  a buffer with several hardware voices through the trap of one of them and ignores the others; Amped 2's results
+  screen left such a pair idle (v72 ignored, v73 the one it acts on), v72 trapped on every frame (~1500/s), no other
+  idle voice was ever reported, and DirectSound's waits for stopped voices ran into their 0.5 s timeout one after
+  another (the results screen at 5-40 fps). `RECOMP_APU_IDLE_LOG=1` prints the idle-voice traps per voice every 5 s.
 
 Verified: Linux build + Windows cross build (MinGW) compile; own decoder test (8 cases, ucontext) green;
 `tools.recomp.test_reserved_idents` green; SSX 3 on Linux reaches the same state as under Proton

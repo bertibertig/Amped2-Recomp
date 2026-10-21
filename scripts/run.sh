@@ -30,6 +30,8 @@
 #                           scripts/press.sh start / a:400 / down …
 #   RECOMP_PAD_SCRIPT=40000:start,44000:a   timed presses (ms after the pad enumerates), or =@file
 #   RECOMP_WATCHDOG_SECS=n / RECOMP_KERNEL_LOG_BUDGET=n   hang watchdog / longer kernel trace
+#   AMPED2_STALL_MS=n       lag spikes: sample the game thread's stack when no flip came for n ms ([STALL] lines)
+#   RECOMP_APU_IDLE_LOG=1   APU idle-voice traps per voice every 5 s
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -x "$HERE/amped2_recomp" ]; then
   set -euo pipefail                                   # release package: binary, run.sh and game_files/ side by side
