@@ -82,7 +82,8 @@
       window mode saved, window icon from the disc
 - [ ] Windows: controller unresponsive after clicking out of the window, once (not reproduced); one
       `z:\image.res` sharing violation that launched `Boom.xbe` (not reproduced)
-- [ ] CI's Windows job builds the Vulkan back end now: needs glslc (Vulkan SDK) and the SDL submodule
+- [ ] CI's Windows job builds the Vulkan back end now: glslc from MSYS2's `mingw-w64-x86_64-shaderc`, SDL from the
+      submodule (recursive checkout) – not run yet
 - [ ] Windows under Wine/Proton: movies stay black (video overlay in the D3D11/CPU window path) and no music
       (sound effects play) – recheck with the dispatch lock (the Linux music dropout was a DPC race, which a
       ~2-6 fps software-rendered run hits all the more)

@@ -28,6 +28,7 @@ common_files() {  # common_files <package dir>
   cp "$TOOLKIT/NOTICE" "$pkg/licenses/xboxrecomp-NOTICE.txt"
   cp "$TOOLKIT/LICENSES/LGPL-2.1.txt" "$pkg/licenses/LGPL-2.1.txt"
   cp "$ROOT/third_party/volk/LICENSE.md" "$pkg/licenses/volk-MIT.txt"
+  cp "$ROOT/third_party/SDL/LICENSE.txt" "$pkg/licenses/SDL2-zlib.txt"
 }
 
 if [ "${SKIP_LINUX:-0}" != 1 ]; then

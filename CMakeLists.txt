@@ -3,9 +3,10 @@ cmake_minimum_required(VERSION 3.20)
 # ============================================================================
 # Amped 2 (Xbox) - Static Recompilation
 #
-# Builds on Windows (MSVC or MinGW: D3D11/XInput/XAudio2) and on Linux/macOS
-# (GCC/Clang: SDL2 + OpenGL 3.3 via libepoxy). The runtime picks its backend
-# per platform; this file only adds the host-specific link libraries.
+# Builds on Windows (MinGW: XInput/XAudio2) and on Linux/macOS (GCC/Clang:
+# SDL2). Rendering: our Vulkan back end on both (AMPED2_VULKAN, SDL2 window;
+# on Windows SDL2 is the third_party/SDL submodule, linked statically), the
+# runtime's software renderer as the fallback (AMPED2_RENDERER=cpu).
 # ============================================================================
 
 project(amped2_recomp C)

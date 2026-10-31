@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Windows build (D3D11/XInput/XAudio2) via the MinGW-w64 cross compiler, e.g. for testing under Proton.
+# Windows build (Vulkan/XInput/XAudio2) via the MinGW-w64 cross compiler, e.g. for testing under Proton.
+# Also needs glslc (Linux: the glslc package) and the third_party/SDL submodule.
 #   scripts/build_win.sh            # → build-win/amped2_recomp.exe
 # Needs: sudo pacman -S --needed mingw-w64-gcc   (xboxrecomp ships the toolchain file)
 source "$(dirname "$0")/_common.sh"

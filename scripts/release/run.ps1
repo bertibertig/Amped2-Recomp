@@ -53,6 +53,12 @@ foreach ($name in $defaults.Keys) {
     [Environment]::SetEnvironmentVariable($name, $defaults[$name])
   }
 }
+# The software renderer draws into the framebuffer window; the Vulkan back end opens its own (as run.bat)
+if ($env:AMPED2_RENDERER -eq 'cpu') {
+  if (-not $env:RECOMP_FB_WINDOW) { $env:RECOMP_FB_WINDOW = '1' }
+} else {
+  $env:RECOMP_FB_WINDOW = $null
+}
 
 Set-Location -LiteralPath $here
 Write-Host 'Starting Amped 2 (output: run.log) ...'
