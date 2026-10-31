@@ -28,6 +28,7 @@
  * spelling the externs out: g_eax, g_esp ... are thread-local (RECOMP_TLS),
  * and a plain `extern uint32_t g_eax` silently refers to the wrong storage. */
 #include "recomp/gen/recomp_types.h"   /* copied there by the recompiler */
+#include "amped2_addrs.h"              /* src/version/<build>/: data addresses */
 
 /* ── ICALL trace ring buffer ───────────────────────────────── */
 
@@ -51,13 +52,12 @@
  * that file to the recompiler with --exclude-manual, which skips generating
  * those functions. So direct calls reach them too, not only indirect ones
  * (recomp_lookup_manual below). After adding or removing one there, re-run
- * `scripts/run_pipeline.sh recomp`. Addresses in the comments below are PAL;
- * src/version/ntsc_u/overrides.c lists the NTSC-U ones.
+ * `scripts/run_pipeline.sh recomp`. Addresses in the comments below are PAL
+ * unless marked NTSC-U; src/version/ntsc_u/overrides.c lists the NTSC-U ones.
  *
  * Keep sub_XXXXXXXX names out of this file: the recompiler scans only
  * overrides.c, so a name mentioned here is not guaranteed to link.
  */
-#include "amped2_addrs.h"
 
 /* XAPI media check (0x00255202, called once from 0x002553DC during process
  * start-up).
