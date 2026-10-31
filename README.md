@@ -137,7 +137,7 @@ cmake -S . -B build-win -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build bui
 
 A checkout with `core.autocrlf=true` (the Git for Windows default) works: the runtime patches are applied with
 matching line endings. The window icon is the game's dashboard image, read from your disc at run time (nothing of it
-in the repository); `-DAMPED2_EMBED_DISC_ICON=ON` also puts it into the exe, for local builds only.
+in the repository; the exe file itself keeps the default icon).
 
 Without the build dependencies on the host: `scripts/docker.sh scripts/run_pipeline.sh` and
 `scripts/docker.sh scripts/build.sh` do the same in an Ubuntu 24.04 container (docker or podman), the binary goes to

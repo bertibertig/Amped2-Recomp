@@ -129,20 +129,6 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${XBOXRECOMP_DIR}/include
 )
 
-# The exe's icon on Windows: the XBE's dashboard title image, extracted from
-# the disc by run_pipeline.sh (scripts/xbe_icon.py) next to the generated
-# code -- never committed. Opt-in, for local builds only: an exe that is
-# published must not carry the game's artwork. The window and taskbar icon
-# needs none of this -- src/title_image.c decodes it at run time from the
-# player's own default.xbe.
-option(AMPED2_EMBED_DISC_ICON "Embed the disc's title image as the exe icon (local builds only, never for a release)" OFF)
-set(AMPED2_ICON ${CMAKE_CURRENT_SOURCE_DIR}/src/recomp/gen/amped2.ico)
-if(WIN32 AND AMPED2_EMBED_DISC_ICON AND NOT AMPED2_HOST_ONLY AND EXISTS ${AMPED2_ICON})
-    enable_language(RC)
-    file(WRITE ${CMAKE_BINARY_DIR}/amped2_icon.rc "1 ICON \"${AMPED2_ICON}\"\n")
-    target_sources(${PROJECT_NAME} PRIVATE ${CMAKE_BINARY_DIR}/amped2_icon.rc)
-endif()
-
 if(WIN32)
     # MinGW's libxinput.a imports xinput1_3.dll, which only the DirectX 2010
     # redistributable installs; xinput1_4.dll ships with Windows 8 and later.

@@ -613,6 +613,6 @@ _(date – what was done, what was found, next step)_
     (`amped2_settings_save_window`: from the file as it is, without this run's environment overrides).
   - Icon: the XBE's dashboard title image (`$$XTIMAGE`, 128x128 DXT1) decoded at run time from the player's
     default.xbe (`src/title_image.c`) as the window/taskbar icon – no game art in the repository or a release. The
-    exe's own icon can be embedded from `src/recomp/gen/amped2.ico` (written by run_pipeline.sh,
-    `scripts/xbe_icon.py`) with `-DAMPED2_EMBED_DISC_ICON=ON`, local builds only.
+    exe file keeps the default icon (embedding the disc's image there was tried as a local-only option and dropped:
+    a release must not carry it, and the window icon covers the running game).
   - settings_test covers `game_dir` (spaces, quotes, environment override).
