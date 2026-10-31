@@ -85,16 +85,17 @@ Windows (10 or 11, x86-64): double-click run.bat, or right-click run.ps1 and
     powershell -ExecutionPolicy Bypass -File .\run.ps1 ).
   Both write the console output to run.log next to them; run.ps1 also shows
   its last lines when the game ends with an error.
-  Windows is experimental and NOT playable yet:
-  - It only has the software (CPU) renderer: about 4-6 fps in the menus and
-    about 2 fps on the slope. The fast Vulkan renderer and the graphics
-    settings are Linux-only so far.
-  - So far it has only been tested on Linux with Wine and Proton, not on a
-    real Windows PC. Reports from Windows 10/11 are welcome.
-  - Under Wine/Proton the movies stay black, and there may be no music
-    (sound effects work).
-  - run.ps1 is new and has not been tried on a real Windows PC yet; if it
-    does not start, use run.bat.
+  amped2_recomp.exe can also be started directly (double-click, a launcher):
+  it applies the same defaults. It needs a Vulkan driver (any current NVIDIA,
+  AMD or Intel driver).
+  - The graphics settings work on Windows too, but the settings screen
+    (--settings) does not show there: edit
+    %APPDATA%\amped2-recomp\settings.ini instead. Alt+Enter or F11 switches
+    windowed / fullscreen; the mode you leave it in is remembered.
+  - The game files can also live elsewhere: game_dir = <folder> in the [paths]
+    section of settings.ini.
+  - run.ps1 has not been tried on a real Windows PC yet; if it does not
+    start, use run.bat or start amped2_recomp.exe directly.
 
 There is no macOS package yet.
 
@@ -124,13 +125,13 @@ Keyboard (player 1, only while the game window has the focus):
 
   AMPED2_SKIP_LOGOS=0     show the Microsoft Game Studios logo (skipped by default)
   AMPED2_SKIP_INTRO=1     skip the intro movie too
-  AMPED2_RENDERER=cpu     software renderer (reference, slow; Linux only, Windows
-                          always uses it)
+  AMPED2_RENDERER=cpu     software renderer (reference, slow)
+  AMPED2_GAME_DIR=<dir>   game files somewhere else than game_files
   AMPED2_PAD_TRACE=1      log every controller button change
 
   AMPED2_RESOLUTION_SCALE=1..5, AMPED2_ASPECT_RATIO=4:3|16:9|16:10|21:9,
   AMPED2_FRAMERATE, AMPED2_FRAME_LIMIT, AMPED2_WINDOW_MODE, AMPED2_DISPLAY
-                          override the --settings choices for one run (Linux)
+                          override the settings for one run
 
 e.g.  AMPED2_SKIP_INTRO=1 ./run.sh
 On Windows: set AMPED2_SKIP_INTRO=1 in a console, then start run.bat from it;
@@ -150,9 +151,8 @@ in PowerShell:  $env:AMPED2_SKIP_INTRO = '1'; .\run.ps1
   in dry.
 - The software renderer (Windows, AMPED2_RENDERER=cpu) draws stray triangles
   stretched out from trees and other objects.
-- Windows: see section 2 (software renderer only, very slow, no graphics
-  settings, --settings does not work; black movies and possibly no music
-  under Wine/Proton).
+- Windows: --settings does not show (edit settings.ini); not tested under
+  Wine/Proton with the Vulkan renderer yet.
 
 Bug reports: https://github.com/bertibertig/Amped2-Recomp/issues
 Please attach the console output (./run.sh 2>&1 | tee run.log; Windows: run.log).

@@ -74,15 +74,23 @@
 ## Later
 - [x] Windows package (MinGW): boots, menus and a ride under Wine 11 / GE-Proton with `RECOMP_WIN_PLACEHOLDER=1`
       (set by `run.bat`), software renderer only (~2-6 fps); shipped with v0.1.0 as experimental
-- [ ] Windows: Vulkan back end (Win32 surface) – the software renderer is far too slow to play
+- [x] Windows: Vulkan back end (2026-10-30) – SDL2 window (`third_party/SDL`, static), glslc from the Vulkan SDK,
+      native build with MinGW / llvm-mingw; menus 60+ fps, rides ~40-110 fps (Windows 11, RTX 4070 SUPER)
+- [x] Windows: saves "Unable to load" and an empty soundtrack list – zero-length directory pattern (runtime
+      patch 0002); music turning loud/distorted – dispatch-lock timeout raised to 1000 ms on Windows
+- [x] Windows: exe started directly (defaults in WinMain, game files found next to the exe or via `game_dir`),
+      window mode saved, window icon from the disc
+- [ ] Windows: controller unresponsive after clicking out of the window, once (not reproduced); one
+      `z:\image.res` sharing violation that launched `Boom.xbe` (not reproduced)
+- [ ] CI's Windows job builds the Vulkan back end now: needs glslc (Vulkan SDK) and the SDL submodule
 - [ ] Windows under Wine/Proton: movies stay black (video overlay in the D3D11/CPU window path) and no music
       (sound effects play) – recheck with the dispatch lock (the Linux music dropout was a DPC race, which a
       ~2-6 fps software-rendered run hits all the more)
-- [ ] Windows: test on real Windows 10/11 – `run.bat` and the new `run.ps1` (v0.2.0; `run.ps1` only checked with
-      PowerShell 7 on Linux against a stand-in binary)
+- [ ] Windows: `run.bat` and `run.ps1` on real Windows 10/11 (the exe itself is tested on Windows 11, started directly
+      and from Git Bash; `run.ps1` only checked with PowerShell 7 on Linux against a stand-in binary)
 - [ ] Windows: `--settings` TUI does not show – amped2_recomp.exe is a GUI-subsystem program, so it has no console
       for the settings screen (AttachConsole/AllocConsole when `--settings` is given, or a console build); run.bat /
-      run.ps1 also redirect its output to run.log. The settings are Vulkan-only anyway until the Windows Vulkan port
+      run.ps1 also redirect its output to run.log. Until then settings.ini is edited by hand on Windows
 - [ ] Windows under Wine/Proton: check by ear whether the music plays now (v0.2.0 test: the APU's WAV tap is not
       silent, but that is not what XAudio2 plays)
 - [ ] Software renderer: stray triangles stretched out from trees/objects (seen on Windows; check

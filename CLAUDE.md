@@ -48,7 +48,8 @@ Guides: `xboxrecomp/docs/GETTING_STARTED.md`, `xboxrecomp/docs/pipeline/06-debug
 `xboxrecomp/docs/technical/indirect-calls.md`, `xboxrecomp/docs/technical/pushbuffer-executor.md`, `lessons-learned.md`.
 
 ## Platform note
-- **Linux first** (target: Steam Deck), Windows second (MinGW cross build + Proton, later native), macOS later.
+- **Linux** (target: Steam Deck) and **Windows** (native build with MinGW / llvm-mingw from Git Bash, or the MinGW
+  cross build + Proton), both with the Vulkan back end; macOS later.
 - Linux: own POSIX host (sigaction MMIO faults, SDL2 window) and the Vulkan back end from SSX3-Recomp. The toolkit's
   OpenGL path (`d3d8_gl.c`) is not used.
 - The pipeline (steps 2–5) runs anywhere (Python + capstone).

@@ -54,7 +54,9 @@ available as the reference (`AMPED2_RENDERER=cpu`) for comparison dumps; the Vul
 2. ✅ Triangles with vertex colour + texture stage 0, blend/depth/stencil/alpha test. 60 fps title/menu.
 3. ✅ Interface extension + combiner uber-shader + multitexturing. Race 55–60 fps (with the vertex cache and
    pre-decoded vertex programs in the runtime patch).
-4. Render-to-texture checks, AA/resolution, per-triangle culling, frames in flight, Windows (Win32 surface instead of SDL).
+4. Render-to-texture checks, AA/resolution, per-triangle culling, frames in flight. Windows ✅ – with SDL2 there too
+   (submodule `third_party/SDL`, linked statically; guest thread via SDL threads, `Sleep(0)` instead of
+   `sched_yield`), so no separate Win32 surface code.
 
 ## Amped 2
 - **Video overlay**: movies (XMV) are shown through the NV2A overlay, not drawn (see `docs/notes.md`). The runtime
