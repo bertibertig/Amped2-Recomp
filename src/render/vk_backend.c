@@ -2286,16 +2286,7 @@ static int covers_guest_screen(const Nv2aBatch *b, const VkbSurface *s)
  * particles test depth and keep filling the sides. */
 static int overlay_2d(const Nv2aBatch *b)
 {
-    float r0 = 1e9f, r1 = -1e9f;
-    uint32_t i;
-
-    if (b->state->depth_test_enable || !b->count)
-        return 0;
-    for (i = 0; i < b->count; i++) {
-        if (b->vertices[i].rhw < r0) r0 = b->vertices[i].rhw;
-        if (b->vertices[i].rhw > r1) r1 = b->vertices[i].rhw;
-    }
-    return r1 - r0 <= 1e-5f * r1;
+    return !b->state->depth_test_enable && flat_depth(b);
 }
 
 /* Whether the game's cameras already render the setting's aspect (squeezed
