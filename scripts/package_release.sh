@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Builds the release packages into dist/ (no game files in them):
-#   dist/Amped2-Recomp-<version>-linux-x86_64.tar.gz    built in an Ubuntu 24.04 container -> runs on glibc 2.39+
-#   dist/Amped2-Recomp-<version>-windows-x86_64.zip     MinGW cross build (scripts/build_win.sh)
+#   dist/Amped2-Recomp-<version>-<disc>-linux-x86_64.tar.gz   built in an Ubuntu 24.04 container -> glibc 2.39+
+#   dist/Amped2-Recomp-<version>-<disc>-windows-x86_64.zip    MinGW cross build (scripts/build_win.sh)
+# <disc> is the disc version the generated code belongs to (pal or ntsc-u): a package runs only with that disc.
 #   scripts/package_release.sh v0.1.0
 # Needs: docker (or podman) for the Linux build, mingw-w64-gcc and zip on the host for the Windows build, and the
 # generated code (scripts/run_pipeline.sh).
@@ -9,6 +10,7 @@
 source "$(dirname "$0")/_common.sh"
 VERSION="${1:?Usage: scripts/package_release.sh <version, e.g. v0.1.0>}"
 [ -f "$GEN_DIR/recomp_funcs.h" ] || { echo "No generated code. First run: scripts/run_pipeline.sh" >&2; exit 1; }
+DISC="$(tr _ - < "$GEN_DIR/xbe_version.txt")"   # pal / ntsc-u
 DIST="$ROOT/dist"
 JOBS="${JOBS:-8}"
 mkdir -p "$DIST"
@@ -31,7 +33,7 @@ common_files() {  # common_files <package dir>
 if [ "${SKIP_LINUX:-0}" != 1 ]; then
   # Ubuntu 24.04 container (docker/Dockerfile) -> glibc 2.39, runs on older distros and SteamOS too
   BUILD_DIR="$ROOT/build-release-linux" JOBS="$JOBS" "$ROOT/scripts/docker.sh" scripts/build.sh
-  PKG="$DIST/Amped2-Recomp-$VERSION-linux-x86_64"
+  PKG="$DIST/Amped2-Recomp-$VERSION-$DISC-linux-x86_64"
   rm -rf "$PKG"; mkdir -p "$PKG"
   cp "$ROOT/build-release-linux/amped2_recomp" "$ROOT/scripts/run.sh" "$PKG/"
   common_files "$PKG"
@@ -41,7 +43,7 @@ fi
 
 if [ "${SKIP_WINDOWS:-0}" != 1 ]; then
   JOBS="$JOBS" "$ROOT/scripts/build_win.sh"
-  PKG="$DIST/Amped2-Recomp-$VERSION-windows-x86_64"
+  PKG="$DIST/Amped2-Recomp-$VERSION-$DISC-windows-x86_64"
   rm -rf "$PKG"; mkdir -p "$PKG"
   cp "$ROOT/build-win/amped2_recomp.exe" "$ROOT/scripts/release/run.bat" "$ROOT/scripts/release/run.ps1" "$PKG/"
   common_files "$PKG"

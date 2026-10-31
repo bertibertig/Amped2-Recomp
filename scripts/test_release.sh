@@ -11,7 +11,8 @@
 #                  player's own ~/.config/amped2-recomp/settings.ini does not change the result)
 source "$(dirname "$0")/_common.sh"
 VERSION="${1:?Usage: scripts/test_release.sh <version, e.g. v0.1.0>}"
-ARCHIVE="$ROOT/dist/Amped2-Recomp-$VERSION-linux-x86_64.tar.gz"
+DISC="$(tr _ - < "$GEN_DIR/xbe_version.txt")"   # the package name carries it (scripts/package_release.sh)
+ARCHIVE="$ROOT/dist/Amped2-Recomp-$VERSION-$DISC-linux-x86_64.tar.gz"
 OUT="$ROOT/logs/release-test-$VERSION"
 RUN_SECS="${RUN_SECS:-150}"
 [ -f "$ARCHIVE" ] || { echo "$ARCHIVE missing – first run scripts/package_release.sh $VERSION" >&2; exit 1; }
@@ -23,7 +24,7 @@ say() { echo "$*" | tee -a "$SUMMARY"; }
 
 say "== Linux: $(basename "$ARCHIVE")"
 tar -C "$OUT/pkg" -xzf "$ARCHIVE"
-P="$OUT/pkg/Amped2-Recomp-$VERSION-linux-x86_64"
+P="$OUT/pkg/Amped2-Recomp-$VERSION-$DISC-linux-x86_64"
 if (cd "$P" && ./run.sh) > "$OUT/nofiles.log" 2>&1; then say "  FAIL: run.sh started without game files"
 else say "  missing game files: $(grep -q 'default.xbe missing' "$OUT/nofiles.log" && echo 'stops with the message (ok)' || echo 'FAIL, see nofiles.log')"; fi
 

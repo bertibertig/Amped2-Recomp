@@ -43,7 +43,7 @@ else
 fi
 [ -x "$EXE" ] || { echo "No build. First run: scripts/build.sh" >&2; exit 1; }
 [ -f "$ROOT/game_files/default.xbe" ] || {
-  echo "game_files/default.xbe missing: put the extracted contents of your Amped 2 Xbox disc (PAL) into $ROOT/game_files/" >&2
+  echo "game_files/default.xbe missing: put the extracted contents of your Amped 2 Xbox disc (PAL or NTSC-U) into $ROOT/game_files/" >&2
   exit 1; }
 cd "$ROOT"
 export RECOMP_TITLE_KEVENTS="${RECOMP_TITLE_KEVENTS:-1}"

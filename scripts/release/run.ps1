@@ -25,7 +25,7 @@ function Stop-WithPause([int]$code) {
 }
 
 if (-not (Test-Path -LiteralPath (Join-Path $gameFiles 'default.xbe'))) {
-  Write-Host 'game_files\default.xbe missing: put the extracted contents of your Amped 2 Xbox disc (PAL) into'
+  Write-Host 'game_files\default.xbe missing: put the extracted contents of your Amped 2 Xbox disc (PAL or NTSC-U) into'
   Write-Host "$gameFiles\  - see README.txt, section 1."
   Stop-WithPause 1
 }

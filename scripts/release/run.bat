@@ -5,7 +5,7 @@ rem Options: set them before starting, e.g.  set AMPED2_SKIP_INTRO=1  then  run.
 setlocal
 cd /d "%~dp0"
 if not exist "game_files\default.xbe" (
-  echo game_files\default.xbe missing: put the extracted contents of your Amped 2 Xbox disc ^(PAL^) into
+  echo game_files\default.xbe missing: put the extracted contents of your Amped 2 Xbox disc ^(PAL or NTSC-U^) into
   echo %~dp0game_files\  - see README.txt, section 1.
   pause
   exit /b 1

@@ -1,9 +1,9 @@
 Put the extracted contents of YOUR OWN Amped 2 Xbox disc here.
 
 This release contains no game data. You need a legally obtained copy of
-Amped 2 for the original Xbox, PAL/EU version (title ID 4D530041), which is the
-build this port was made from. Other versions (NTSC-U, NTSC-J) are not tested
-and most likely do not work.
+Amped 2 for the original Xbox (title ID 4D530041), in the version this package
+is built for: PAL/Europe or NTSC-U/North America (see the package name and
+README.txt, section 1). NTSC-J is not supported.
 
 After extracting the disc image this folder must look like this:
 

@@ -22,7 +22,7 @@ Same scheme as SSX3-Recomp's `docs/RELEASING.md`.
 ## Release notes
 - Sources besides git: the `docs/notes.md` entries dated after the last release and `docs/TODO.md`.
 - Write `docs/release-notes/<version>.md`, based on the previous file there. Always include the
-  **no game files included** warning (own PAL/EU disc, title ID 4D530041) and the Getting started section.
+  **no game files included** warning (own disc, title ID 4D530041, in the package's version: PAL/EU or NTSC-U) and the Getting started section.
 - Platform status: say exactly what was tested where (GPU/driver too); never claim an untested platform.
 - Full changelog link (from the second release on): `https://github.com/bertibertig/Amped2-Recomp/compare/<last>...<version>`.
 - License line: GPL-3.0-or-later, third-party licenses in `licenses/`, unofficial fan project.
@@ -35,16 +35,17 @@ Same scheme as SSX3-Recomp's `docs/RELEASING.md`.
 scripts/package_release.sh <version> > logs/package-<version>.log 2>&1    # background, ~10-15 min
 ```
 
-Linux is built in the Ubuntu 24.04 container (glibc 2.39+), Windows with the host's MinGW (`SKIP_WINDOWS=1` leaves
-it out). Checks:
+`<disc>` is `pal` or `ntsc-u`, the disc the generated code was made from (a package runs only with that disc; for
+both, run the pipeline and the packaging once per disc). Linux is built in the Ubuntu 24.04 container (glibc 2.39+),
+Windows with the host's MinGW (`SKIP_WINDOWS=1` leaves it out). Checks:
 
 ```bash
 tail -3 logs/package-<version>.log; cat dist/SHA256SUMS-<version>.txt
-tar tvzf dist/Amped2-Recomp-<version>-linux-x86_64.tar.gz
-tar tzf dist/Amped2-Recomp-<version>-linux-x86_64.tar.gz | grep -iE '\.(xbe|iso|xiso|xpr|xmv|wma|res|json)$|/gen/' && echo "GAME DATA FOUND - STOP"
-objdump -T dist/Amped2-Recomp-<version>-linux-x86_64/amped2_recomp | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1   # <= 2.39
-objdump -p dist/Amped2-Recomp-<version>-linux-x86_64/amped2_recomp | grep NEEDED
-x86_64-w64-mingw32-objdump -p dist/Amped2-Recomp-<version>-windows-x86_64/amped2_recomp.exe | grep 'DLL Name'   # XINPUT1_4, UCRT, no MinGW DLLs
+tar tvzf dist/Amped2-Recomp-<version>-<disc>-linux-x86_64.tar.gz
+tar tzf dist/Amped2-Recomp-<version>-<disc>-linux-x86_64.tar.gz | grep -iE '\.(xbe|iso|xiso|xpr|xmv|wma|res|json)$|/gen/' && echo "GAME DATA FOUND - STOP"
+objdump -T dist/Amped2-Recomp-<version>-<disc>-linux-x86_64/amped2_recomp | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1   # <= 2.39
+objdump -p dist/Amped2-Recomp-<version>-<disc>-linux-x86_64/amped2_recomp | grep NEEDED
+x86_64-w64-mingw32-objdump -p dist/Amped2-Recomp-<version>-<disc>-windows-x86_64/amped2_recomp.exe | grep 'DLL Name'   # XINPUT1_4, UCRT, no MinGW DLLs
 ```
 
 ## Test (Linux)
@@ -84,6 +85,6 @@ git push origin main
 git tag -a <version> -m "Amped2-Recomp <version>" && git push origin refs/tags/<version>
 gh release create <version> --verify-tag --title "Amped2-Recomp <version>" \
   --notes-file docs/release-notes/<version>.md --latest \
-  dist/Amped2-Recomp-<version>-linux-x86_64.tar.gz dist/Amped2-Recomp-<version>-windows-x86_64.zip \
+  dist/Amped2-Recomp-<version>-<disc>-linux-x86_64.tar.gz dist/Amped2-Recomp-<version>-<disc>-windows-x86_64.zip \
   dist/SHA256SUMS-<version>.txt
 ```

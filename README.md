@@ -38,8 +38,8 @@ Plan and open items: [docs/TODO.md](docs/TODO.md), running log: [docs/notes.md](
 
 ## Playing a release
 
-1. Download the package for your system from the [releases page](https://github.com/bertibertig/Amped2-Recomp/releases)
-   and unpack it.
+1. Download the package for your system and disc version (PAL or NTSC-U) from the
+   [releases page](https://github.com/bertibertig/Amped2-Recomp/releases) and unpack it.
 2. Put **your own** game files into its `game_files/` folder – see [Preparing the game files](#preparing-the-game-files).
 3. Start it with `./run.sh` (Linux; `./run.sh --settings` for the graphics settings) or on Windows by
    double-clicking `run.bat` or with `run.ps1` (right-click → *Run with PowerShell*, or
@@ -84,7 +84,7 @@ version it needs. Other versions are not supported.
    letter case of the names does not matter).
 
 ```text
-Amped2-Recomp-v0.2.0-linux-x86_64/
+Amped2-Recomp-<version>-<disc>-linux-x86_64/
 ├── amped2_recomp
 ├── run.sh
 └── game_files/
