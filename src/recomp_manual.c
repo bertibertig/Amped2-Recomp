@@ -22,6 +22,7 @@
 #include <stdint.h>
 #include <stddef.h>   /* ptrdiff_t */
 #include <stdlib.h>   /* getenv */
+#include <string.h>   /* strstr */
 #include <time.h>     /* timespec_get */
 
 /* The runtime's register model and ICALL declarations. Use these rather than
@@ -265,6 +266,43 @@ void amped2_boot_movie(const char *which, const char *skip_env, void (*play)(voi
         fprintf(stderr, "[BOOT] skipping the %s movie\n", which);
     g_eax = 0;
     g_esp += 4;     /* ret */
+}
+
+/* The game's "launch another XBE" routine (cdecl: path, launch data), which
+ * ends in XLaunchNewImage. Only default.xbe is recompiled, so a hand-off ends
+ * the port. Two callers matter:
+ *   - D:\cdx.xbe, the disc's extras/video launcher: the title screen's attract
+ *     mode starts it after ~40 s without input. Skipped: the game ignores the
+ *     result and stays on the title screen.
+ *   - d:\Boom.xbe, from ~70 places: the game's fatal-error program (the disc
+ *     error screen). Still exits -- carrying on after the error would be
+ *     worse -- but says so, since "the window closed" is all a player sees. */
+void amped2_launch_xbe(void (*launch)(void))
+{
+    uint32_t path_va = MEM32(g_esp + 4);
+    char path[64];
+    uint32_t i;
+
+    for (i = 0; i < sizeof path - 1 && path_va; i++)
+        if (!(path[i] = (char)MEM8(path_va + i)))
+            break;
+    path[path_va ? i : 0] = '\0';
+    for (i = 0; path[i]; i++)
+        if (path[i] >= 'A' && path[i] <= 'Z')
+            path[i] = (char)(path[i] - 'A' + 'a');
+    if (strstr(path, "cdx.xbe")) {
+        static int said;
+        if (said++ < 3)
+            fprintf(stderr, "[LAUNCH] %s (attract mode / extras) is not part of the port; "
+                            "staying in the game\n", path);
+        g_eax = 0;
+        g_esp += 4;                         /* cdecl: ret */
+        return;
+    }
+    fprintf(stderr, "[LAUNCH] the game launches %s%s -- the port ends here\n", path,
+            strstr(path, "boom.xbe") ? " (its fatal-error program: something failed above)" : "");
+    fflush(stderr);
+    launch();
 }
 
 /* XMV frame fetch (XMV section 0x002CDE60, stdcall, 4 arguments; reached

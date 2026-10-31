@@ -38,3 +38,9 @@ void sub_002CDB60(void) { amped2_xmv_fetch(sub_002CDB60_gen); }
 
 /* XNetGetTitleXnAddr (PAL 0x002BB66E): `mov ecx, [0x0038BF38]; jmp 0x002BB270`. */
 void sub_002BB36E(void) { amped2_xnet_get_title_xnaddr(); }
+
+/* The game's launch-another-XBE routine (cdecl: path, launch data): D:\cdx.xbe from the title screen's attract
+ * mode (0x001028E0) is skipped, d:\Boom.xbe (fatal error) still exits but says so. See amped2_launch_xbe. */
+extern void amped2_launch_xbe(void (*launch)(void));
+extern void sub_000223D0_gen(void);
+void sub_000223D0(void) { amped2_launch_xbe(sub_000223D0_gen); }

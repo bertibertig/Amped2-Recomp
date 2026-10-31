@@ -581,3 +581,8 @@ _(date – what was done, what was found, next step)_
   and returned at once (the original Windows report). The XBE header's build timestamp (+0x114) is compared with
   `AMPED2_XBE_TIMESTAMP` (src/version/<build>/amped2_addrs.h: NTSC-U 0x3F79CB6F from the user's XBE, PAL 0x3F7D0DFD
   from the build date in this file – not checked against a PAL XBE yet); a mismatch names the build the exe is for.
+- 2026-10-30 – **Title-screen attract mode no longer ends the port (NTSC-U).** Left ~40 s without input on the title
+  screen, the game launches `D:\cdx.xbe` (the disc's extras/video launcher, 0x001028E0) through its launch routine
+  0x000223D0 – ~70 other callers pass `d:\Boom.xbe`, the fatal-error program. Only default.xbe is recompiled, so the
+  window closed. `amped2_launch_xbe` (overrides.c wraps 0x000223D0) skips the cdx launch – the game ignores the result
+  and stays on the title screen – and lets the others exit with a `[LAUNCH]` line. PAL: routine not located yet.
