@@ -18,7 +18,8 @@ It follows the same route as SSX3-Recomp (our SSX 3 port with the same toolkit):
 | Milestone | |
 |---|---|
 | Repo, toolkit (xboxrecomp v0.14.0 + our runtime patch), scripts | ✅ |
-| Game data in `game_files/` (PAL, title ID 0x4D530041, XDK 5558) | ✅ |
+| Game data in `game_files/` (PAL or NTSC-U, title ID 0x4D530041, XDK 5558) | ✅ |
+| NTSC-U (North America) disc next to PAL: per-version addresses and seeds; the program refuses the other disc version with a message | ✅ |
 | Pipeline: 14,365 functions lifted, 0 translation errors, 1.96 M lines of C | ✅ |
 | Host and input ported from SSX3-Recomp, Linux build (CPU renderer, multi-threaded) | ✅ |
 | Boot: XAPI (media check bypassed), D3D, XACT/WMA audio, XNet offline, splash screen | ✅ |
@@ -54,8 +55,16 @@ movies stay black and the music may be missing.
 ## Preparing the game files
 
 The game data always comes from **your own Amped 2 disc**; nothing of it is in this repository or in a release.
-Supported is the **PAL/EU version** (title ID 4D530041, `default.xbe` SHA-1
-`38e63cd016bf084d999e0a911933a52191bfc378`); other versions are not tested.
+Supported are two versions (title ID 4D530041):
+
+| Version | `default.xbe` SHA-1 | Build |
+|---|---|---|
+| PAL / Europe | `38e63cd016bf084d999e0a911933a52191bfc378` | 2003-10-03 |
+| NTSC-U / North America | `5f432b86775b7b334212a3bc09d2063f670865b7` | 2003-09-30 |
+
+The recompiled code belongs to one `default.xbe`, so a program is built for one of them (`scripts/run_pipeline.sh`
+detects which disc is in `game_files/`); started with the other disc's files it stops with a message naming the
+version it needs. Other versions are not supported.
 
 1. **Make a disc image** (`.iso`) of your Amped 2 Xbox disc, e.g. on a modded Xbox or with an Xbox-compatible DVD
    drive. Both a full disc image (Redump style) and a game-partition XISO work.
