@@ -16,7 +16,9 @@
 
 ## Phase 2 – bring-up
 - [ ] Check the real unimplemented instructions (cpuid in sub_0026A2F0, cli/sti, pushfd/popfd in XNET) – see notes
-- [ ] Find out what `Boom.xbe` is and whether default.xbe launches it (XLaunchNewImage)
+- [x] `Boom.xbe` is the game's fatal-error program: ~70 call sites launch it through the launch routine
+      (NTSC-U 0x000223D0). The title screen's attract mode launches `D:\cdx.xbe` (the disc's video launcher)
+      through it after ~40 s idle – skipped now (NTSC-U), the game stays on the title screen
 - [x] First start, seeds, KEVENTs, fence/vblank, DirectSound/AC'97, heap reclaim
 - [x] NTSC-U disc next to PAL (2026-10-30): per-version addresses and seeds (`src/version/<build>/`,
       `config/<build>/`), chosen by the XBE's SHA-1; the program refuses the other version's default.xbe
