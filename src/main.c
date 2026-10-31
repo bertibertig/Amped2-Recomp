@@ -576,7 +576,7 @@ static int boot_memory(void)
         if (xbe_size >= 0x118)
             memcpy(&ts, (const uint8_t *)xbe_data + 0x114, 4);
         if (ts != AMPED2_XBE_TIMESTAMP) {
-            char msg[600];
+            char msg[1400];                     /* xbe_path is up to 1100 */
             time_t t = (time_t)ts;
             struct tm *g = gmtime(&t);
             snprintf(msg, sizeof msg,
