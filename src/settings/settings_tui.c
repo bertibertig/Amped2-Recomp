@@ -348,19 +348,27 @@ static int  e_display(void)        { return S.window_mode != AMPED2_WINDOWED; }
 static const Option k_res_opts[] = {
     { "Internal resolution",
       "The resolution the game is drawn at before it is scaled to the window. "
-      "1x is the Xbox's 640x480 (1280x720 when the game runs its 720p widescreen "
-      "mode, wider than 4:3); every step multiplies both sides. Higher values "
+      "1x is the Xbox's 640x480 (1280x720 in the game's 720p widescreen mode); "
+      "every step multiplies both sides. Higher values "
       "sharpen edges and distant detail and cost GPU time (5x is 25 times the "
       "pixels of 1x per frame).",
       n_scale, t_scale, g_scale, s_scale, NULL },
 };
 static const Option k_aspect_opts[] = {
     { "Aspect ratio",
+#if AMPED2_NATIVE_HD
       "Wider than 4:3 uses the game's own 720p widescreen mode: a wider view, "
       "culled for it, with the game's 16:9 HUD layout. 21:9 widens it further "
       "(the HUD stays 16:9 in the middle); 16:10 shows it with thin bars above "
       "and below. Menus are the game's own 720p menus, drawn stretched as on "
       "the Xbox.",
+#else
+      /* This disc version has no 720p mode by default (main.c, AMPED2_HD). */
+      "Rides get wider: more of the slope at the sides (Hor+), the height of "
+      "the view stays as on the Xbox. The HUD keeps its 4:3 shape in the middle; "
+      "menus and movies stay 4:3 with black bars. Objects at the far edges can "
+      "pop in, as the game only draws what its original 4:3 view could see.",
+#endif
       n_aspect, t_aspect, g_aspect, s_aspect, NULL },
 };
 static const Option k_fps_opts[] = {

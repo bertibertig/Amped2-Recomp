@@ -88,11 +88,11 @@ index 4ebdfb9..8e1630b 100644
          break;
  
 +    case 0x103:
-+        /* XC_FACTORY_AV_REGION: the factory video standard, NTSC-M 60 Hz --
-+         * the standard AvSendTVEncoderOption reports. XAPI reads its second
-+         * byte as the standard (it clears the HD flags on PAL). */
++        /* XC_FACTORY_AV_REGION: with the HD permissions NTSC-M 60 Hz, the
++         * standard AvSendTVEncoderOption reports (XAPI reads its second byte;
++         * on PAL it clears the HD flags); otherwise 0, as when unhandled. */
 +        if (ValueLength >= sizeof(ULONG)) {
-+            *(PULONG)Value = 0x00400100;
++            *(PULONG)Value = xbox_VideoUserFlags() ? 0x00400100 : 0;
 +            if (Type) *Type = 4;
 +            if (ResultLength) *ResultLength = sizeof(ULONG);
 +        }

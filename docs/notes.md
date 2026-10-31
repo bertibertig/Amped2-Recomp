@@ -660,3 +660,11 @@ _(date – what was done, what was found, next step)_
   - User test (21:9, 2x): trees and the sides correct across the full width, natural proportions, HUD fine, movies
     whole, ~70 fps median. The game's own 720p menus are stretched (4:3 art; the original does that too, RE-Amped2 –
     MIT – reports the same and draws text at its own proportions). Resolution scale now multiplies 720p (2x ≈ 1440p).
+- 2026-10-31 – **Review pass over all branches** (no behaviour change in the default flow).
+  - One HD decision (`amped2_native_hd`, settings.c, tested) for start-up and the settings screen: the screen's
+    resolution labels ignored `AMPED2_HD`. Its aspect-ratio help depends on the build (PAL keeps the SD text).
+  - Patch 0004: index 0x103 answers NTSC-M only with the HD permissions, zeros otherwise as before – SD/PAL runs see
+    no change from it.
+  - Packaging: names carry the disc version (`<version>-<disc>-<os>`), SDL2's license is shipped, launcher and
+    `game_files/README.txt` texts name PAL or NTSC-U; CI's Windows job installs glslc (MSYS2 shaderc).
+  - Removed `AMPED2_VK_FADELOG` (the fade work is done); `flat_depth()` shared.

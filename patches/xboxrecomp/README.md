@@ -156,7 +156,8 @@ Verified: Linux build + Windows cross build (MinGW) compile; own decoder test (8
 - `src/kernel/kernel_xbox.c`: `xbox_VideoUserFlags()` – the user's HD permissions in the console's own layout
   (widescreen 0x00010000, 720p 0x00020000, 480p 0x00080000), only with `RECOMP_VIDEO_HD=1`. Added to `XC_VIDEO`
   (`ExQueryNonVolatileSetting`), whose flags XAPI's `XGetVideoFlags` reads from bit 16; the runtime's own low bits stay.
-  New index 0x103 (`XC_FACTORY_AV_REGION`): NTSC-M 60 Hz (0x00400100) instead of "unhandled" (zeros).
+  New index 0x103 (`XC_FACTORY_AV_REGION`): with the permissions NTSC-M 60 Hz (0x00400100), which `XGetVideoFlags`
+  needs to keep the HD flags; without them zeros, as when it was unhandled (so SD titles see no change).
 - `src/kernel/kernel_hal.c` (`AvSendTVEncoderOption`, AV capabilities): the same permission bits. D3D accepts an HD
   mode only when this word carries them – without them Amped 2's `CreateDevice` for 1280x720 failed and the game
   launched its error program.
