@@ -84,9 +84,8 @@
       `z:\image.res` sharing violation that launched `Boom.xbe` (not reproduced)
 - [ ] CI's Windows job builds the Vulkan back end now: glslc from MSYS2's `mingw-w64-x86_64-shaderc`, SDL from the
       submodule (recursive checkout) – not run yet
-- [ ] Windows under Wine/Proton: movies stay black (video overlay in the D3D11/CPU window path) and no music
-      (sound effects play) – recheck with the dispatch lock (the Linux music dropout was a DPC race, which a
-      ~2-6 fps software-rendered run hits all the more)
+- [ ] Windows build under Wine/Proton with the Vulkan back end: not tested yet. With the v0.2.0 software renderer
+      movies stayed black (video overlay in the CPU window path) and the music was missing (sound effects played)
 - [ ] Windows: `run.bat` and `run.ps1` on real Windows 10/11 (the exe itself is tested on Windows 11, started directly
       and from Git Bash; `run.ps1` only checked with PowerShell 7 on Linux against a stand-in binary)
 - [ ] Windows: `--settings` TUI does not show – amped2_recomp.exe is a GUI-subsystem program, so it has no console
