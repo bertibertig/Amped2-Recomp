@@ -4,6 +4,7 @@
 #define AMPED2_ADDRS_H
 
 #define AMPED2_XBE_VERSION      "PAL"
+#define AMPED2_XBE_TIMESTAMP    0x3F7D0DFDu  /* header +0x114: built 2003-10-03 05:49:49 UTC (docs/notes.md) */
 #define AMPED2_ENTRY_POINT      0x00254899u  /* XBE entry point VA */
 #define AMPED2_D3D_DEVICE_PTR   0x0032CEF8u  /* D3D global device pointer (put/limit at +0x00/+0x04) */
 #define AMPED2_PB_RECORDS       0x0032ACC0u  /* RunPushBuffer patch records, 20 bytes each */

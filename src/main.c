@@ -65,6 +65,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>           /* gmtime: the XBE build date in the wrong-disc message */
 
 /* xboxrecomp runtime headers */
 #include <xbox/xboxrecomp.h>
@@ -566,6 +567,28 @@ static int boot_memory(void)
                       "Run from the repository root with the game files in "
                       "'" YOUR_GAME_DIR "'.");
         return 1;
+    }
+    /* The recompiled code belongs to one disc: another build's default.xbe
+     * runs this code on the wrong data and ends at once ("Game returned").
+     * The header's build timestamp tells the builds apart. */
+    {
+        uint32_t ts = 0;
+        if (xbe_size >= 0x118)
+            memcpy(&ts, (const uint8_t *)xbe_data + 0x114, 4);
+        if (ts != AMPED2_XBE_TIMESTAMP) {
+            char msg[600];
+            time_t t = (time_t)ts;
+            struct tm *g = gmtime(&t);
+            snprintf(msg, sizeof msg,
+                     "This program is built for the %s disc of Amped 2, but\n%s\n"
+                     "is from a different version (built %04d-%02d-%02d).\n\n"
+                     "Download the build for your disc's version.",
+                     AMPED2_XBE_VERSION, YOUR_GAME_XBE_PATH, g ? g->tm_year + 1900 : 0,
+                     g ? g->tm_mon + 1 : 0, g ? g->tm_mday : 0);
+            fatal_message(msg);
+            free(xbe_data);
+            return 1;
+        }
     }
     printf("XBE loaded: %zu bytes\n", xbe_size);
 

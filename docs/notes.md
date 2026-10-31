@@ -577,3 +577,7 @@ _(date – what was done, what was found, next step)_
     0x0019B5D0 – the ride crash: ICALL failed, then a read at 0xA4000000 –, 0x001C6F90). 14,376 functions, doctor clean.
   - Played on Windows (feat/windows-vulkan): boot, menus, career profile, rides, saves and music.
   - Open: a media-score element (`{0}` with a camera icon, bottom right) shows in rides but not in the original.
+- 2026-10-30 – **Wrong-disc check.** An exe is generated from one XBE; another build's default.xbe ran the wrong code
+  and returned at once (the original Windows report). The XBE header's build timestamp (+0x114) is compared with
+  `AMPED2_XBE_TIMESTAMP` (src/version/<build>/amped2_addrs.h: NTSC-U 0x3F79CB6F from the user's XBE, PAL 0x3F7D0DFD
+  from the build date in this file – not checked against a PAL XBE yet); a mismatch names the build the exe is for.
