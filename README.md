@@ -140,11 +140,28 @@ A checkout with `core.autocrlf=true` (the Git for Windows default) works: the ru
 matching line endings. The window icon is the game's dashboard image, read from your disc at run time (nothing of it
 in the repository; the exe file itself keeps the default icon).
 
-**VS Code** (the C/C++ and CMake Tools extensions): select a kit for your MinGW clang (*CMake: Select a Kit*; if it
-is not listed, add its `bin` folder to `cmake.additionalCompilerSearchDirs` in your user settings) and the build type
-*RelWithDebInfo*, build, then start *Debug amped2_recomp (Windows, VS debugger)*. With clang that build writes a PDB
-for our code and the runtime (not the generated code), which the Visual Studio debugger of the C/C++ extension
-reads. The bash tasks run in Git Bash.
+**VS Code** (the C/C++ and CMake Tools extensions): the simplest way to tell CMake Tools where your MinGW toolchain
+is, is a `CMakeUserPresets.json` in the repository root (your own file, ignored by git), e.g. with `<bin>` your
+toolchain's `bin` folder:
+
+```json
+{
+  "version": 6,
+  "configurePresets": [
+    { "name": "win-clang", "hidden": true, "generator": "Ninja",
+      "environment": { "PATH": "<bin>;$penv{PATH}" },
+      "cacheVariables": { "CMAKE_C_COMPILER": "<bin>/clang.exe", "CMAKE_MAKE_PROGRAM": "<bin>/ninja.exe" } },
+    { "name": "debuginfo", "inherits": "win-clang", "binaryDir": "${sourceDir}/build",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" } },
+    { "name": "release", "inherits": "win-clang", "binaryDir": "${sourceDir}/build-win",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" } }
+  ]
+}
+```
+
+Pick the preset with *CMake: Select Configure Preset*, build (*CMake: Build*, F7), then start *Debug amped2_recomp
+(Windows, VS debugger)*. With clang the RelWithDebInfo build writes a PDB for our code and the runtime (not the
+generated code), which the Visual Studio debugger of the C/C++ extension reads. The bash tasks run in Git Bash.
 
 Without the build dependencies on the host: `scripts/docker.sh scripts/run_pipeline.sh` and
 `scripts/docker.sh scripts/build.sh` do the same in an Ubuntu 24.04 container (docker or podman), the binary goes to

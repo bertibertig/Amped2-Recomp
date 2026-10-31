@@ -2,8 +2,11 @@
   "files.eol": "\n",
   "files.insertFinalNewline": true,
   "editor.formatOnSave": false,
+  // The repo indents with spaces: 4 (C, CMake, Python), 2 for shell, JSON, YAML, PowerShell and batch files.
+  "editor.insertSpaces": true,
+  "editor.tabSize": 4,
+  "[shellscript][json][jsonc][yaml][powershell][bat]": { "editor.tabSize": 2 },
 
-  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
   "python.terminal.activateEnvironment": true,
 
   "cmake.sourceDirectory": "${workspaceFolder}",
