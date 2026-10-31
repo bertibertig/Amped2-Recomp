@@ -602,9 +602,9 @@ static int find_game_dir(void)
         n--;                                    /* the executable's folder */
     if (n > 0) {
         exe[n] = '\0';
-        snprintf(s_game_dir, sizeof s_game_dir, "%s%s", exe, YOUR_GAME_DIR_NAME);
-        if (has_xbe(s_game_dir))
-            return 1;
+        if (snprintf(s_game_dir, sizeof s_game_dir, "%s%s", exe, YOUR_GAME_DIR_NAME)
+                < (int)sizeof s_game_dir && has_xbe(s_game_dir))
+            return 1;                           /* (a path too long to fit is not tried) */
     }
     snprintf(s_game_dir, sizeof s_game_dir, "%s", YOUR_GAME_DIR_NAME);
     return has_xbe(s_game_dir);
