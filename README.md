@@ -158,7 +158,7 @@ Enter saves and starts, S saves, Q quits. The choices are saved in `~/.config/am
 | Category | Options |
 |---|---|
 | Resolution Scaling | Internal resolution 1x-5x (640x480 up to 3200x2400 at 4:3) |
-| Aspect Ratio | 4:3 (original), 16:9, 16:10, 21:9. Rides become wider (Hor+: more of the slope at the sides, the HUD stays 4:3 in the middle); the menus and movies stay 4:3 |
+| Aspect Ratio | 4:3 (original), 16:9, 16:10, 21:9. Rides become wider (Hor+: more of the slope at the sides, the HUD stays 4:3 in the middle, and what the game parks off screen stays hidden there; full-screen fades cover the whole width); the menus and movies stay 4:3 |
 | Framerate | Original (60 fps) or unlocked, with a limit: the monitor's refresh rate (vsync), 60-360 fps or none. The game runs on its own clock, so gameplay speed does not change |
 | Display | Windowed, fullscreen or borderless fullscreen, and the monitor to use. Alt+Enter or F11 switch in the game; the mode and monitor you leave it in are saved |
 
