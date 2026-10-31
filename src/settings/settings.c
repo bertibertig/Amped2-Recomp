@@ -50,6 +50,7 @@ static void defaults(Amped2Settings *s)
     s->frame_limit = 0;
     s->window_mode = AMPED2_WINDOWED;
     s->display = 0;
+    s->game_dir[0] = '\0';
 }
 
 static int name_index(const char *v, const char *const *names, int n)
@@ -90,6 +91,17 @@ static void apply(Amped2Settings *s, const char *key, const char *v)
         i = atoi(v);
         if (i >= 0 && i < 64)
             s->display = i;
+    } else if (!strcmp(key, "game_dir")) {
+        /* A path, used as written (spaces kept); surrounding quotes dropped. */
+        size_t n = strlen(v);
+        if (n >= 2 && v[0] == '"' && v[n - 1] == '"') {
+            v++;
+            n -= 2;
+        }
+        if (n < sizeof s->game_dir) {
+            memcpy(s->game_dir, v, n);
+            s->game_dir[n] = '\0';
+        }
     }
 }
 
@@ -133,7 +145,7 @@ static char *trim(char *p)
 static void load_file(Amped2Settings *s)
 {
     FILE *f = fopen(amped2_settings_path(), "r");
-    char line[256];
+    char line[1024];                       /* game_dir holds a path */
 
     if (!f)
         return;
@@ -159,7 +171,7 @@ void amped2_settings_load_file_only(void)
 void amped2_settings_load(void)
 {
     static const char *const keys[] = { "resolution_scale", "aspect_ratio", "framerate",
-                                        "frame_limit", "window_mode", "display" };
+                                        "frame_limit", "window_mode", "display", "game_dir" };
     Amped2Settings *s = &g_amped2_settings;
     char env[64];
     size_t i, k;
@@ -198,9 +210,8 @@ static void make_parent_dirs(const char *path)
         }
 }
 
-int amped2_settings_save(void)
+static int save_settings(const Amped2Settings *s)
 {
-    const Amped2Settings *s = &g_amped2_settings;
     const char *path = amped2_settings_path();
     FILE *f;
 
@@ -228,5 +239,29 @@ int amped2_settings_save(void)
     fprintf(f, "window_mode = %s\n", k_window_names[s->window_mode]);
     fprintf(f, "# monitor for fullscreen / borderless (0 = the first)\n");
     fprintf(f, "display = %d\n", s->display);
+    fprintf(f, "\n[paths]\n");
+    fprintf(f, "# folder with the disc's files (default.xbe ...); empty: game_files next to the program\n");
+    fprintf(f, "game_dir = %s\n", s->game_dir);
     return fclose(f) == 0 ? 0 : -1;
+}
+
+int amped2_settings_save(void)
+{
+    return save_settings(&g_amped2_settings);
+}
+
+/* The window as the player left it (F11 / Alt+Enter, the monitor it is on):
+ * written into the file as it is, so this run's environment overrides do not
+ * end up in it. Nothing is written when the file already says so. */
+int amped2_settings_save_window(int window_mode, int display)
+{
+    Amped2Settings file;
+
+    defaults(&file);
+    load_file(&file);
+    if (file.window_mode == window_mode && file.display == display)
+        return 0;
+    file.window_mode = window_mode;
+    file.display = display;
+    return save_settings(&file);
 }

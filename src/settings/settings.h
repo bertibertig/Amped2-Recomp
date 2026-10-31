@@ -10,7 +10,7 @@
  * Environment overrides for one run (testing, scripts), same names as the
  * keys upper-cased with an AMPED2_ prefix: AMPED2_RESOLUTION_SCALE=3,
  * AMPED2_ASPECT_RATIO=16:9, AMPED2_FRAMERATE=unlocked, AMPED2_FRAME_LIMIT=144,
- * AMPED2_WINDOW_MODE=borderless, AMPED2_DISPLAY=1.
+ * AMPED2_WINDOW_MODE=borderless, AMPED2_DISPLAY=1, AMPED2_GAME_DIR=D:\Amped2.
  */
 #ifndef AMPED2_SETTINGS_H
 #define AMPED2_SETTINGS_H
@@ -30,6 +30,8 @@ typedef struct {
                              * -1 = no limit */
     int window_mode;        /* AMPED2_WINDOW* */
     int display;            /* SDL display index for fullscreen / borderless */
+    char game_dir[512];     /* the disc's files (default.xbe ...); "" = game_files next to
+                             * the executable, else in the working directory (main.c) */
 } Amped2Settings;
 
 extern Amped2Settings g_amped2_settings;
@@ -40,6 +42,11 @@ void amped2_settings_load(void);
 /* Write the current values (not the environment overrides' effect on them --
  * the TUI loads without overrides). 0 on success. */
 int amped2_settings_save(void);
+
+/* Only window_mode and display, into the file as it is (without this run's
+ * environment overrides); nothing is written when they are unchanged. 0 on
+ * success. Called when the player toggles fullscreen and on close. */
+int amped2_settings_save_window(int window_mode, int display);
 
 /* The file in use. */
 const char *amped2_settings_path(void);

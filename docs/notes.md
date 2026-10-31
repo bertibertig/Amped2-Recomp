@@ -605,3 +605,14 @@ _(date – what was done, what was found, next step)_
   - Not reproduced: controller unresponsive after clicking out of the window (once); a `z:\image.res` sharing violation
     that made the game launch its error program `Boom.xbe` (once); audio glitches after leaving a run (no host
     underrun or lock warning logged).
+- 2026-10-30 – **Windows usability: game files next to the exe, window state, icon.**
+  - The exe looked for `game_files/` in the working directory only, so double-clicking it (or a launcher starting it
+    elsewhere) failed. `find_game_dir`: `game_dir` in settings.ini / `AMPED2_GAME_DIR`, else `game_files` next to the
+    executable, else in the working directory (scripts/run.sh). The error box says where the files go.
+  - Window state: F11 / Alt+Enter and closing the window write `window_mode` and `display` back to settings.ini
+    (`amped2_settings_save_window`: from the file as it is, without this run's environment overrides).
+  - Icon: the XBE's dashboard title image (`$$XTIMAGE`, 128x128 DXT1) decoded at run time from the player's
+    default.xbe (`src/title_image.c`) as the window/taskbar icon – no game art in the repository or a release. The
+    exe's own icon can be embedded from `src/recomp/gen/amped2.ico` (written by run_pipeline.sh,
+    `scripts/xbe_icon.py`) with `-DAMPED2_EMBED_DISC_ICON=ON`, local builds only.
+  - settings_test covers `game_dir` (spaces, quotes, environment override).

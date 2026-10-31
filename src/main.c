@@ -18,8 +18,8 @@
  *
  * Customize this file for your game:
  *   - Set YOUR_GAME_ENTRY_POINT to the XBE entry point address
- *   - Set YOUR_GAME_XBE_PATH to where the XBE file lives
- *   - Set YOUR_GAME_DIR to the game data directory
+ *   - The game files are found by find_game_dir (settings, next to the exe,
+ *     or the working directory)
  *   - Add any CRT global pre-initialization your game needs
  *   - Customize the VEH handler for game-specific crash diagnosis
  *
@@ -117,12 +117,14 @@ extern ptrdiff_t g_xbox_mem_offset;
 /*
  * From xbe_parser (game_files/default_analysis.json, see docs/notes.md):
  * Amped 2, title ID 0x4D530041, XDK 5558, base 0x00010000.
- * Paths are relative to the working directory (repo root); forward slashes
- * work on both Windows and Linux.
+ * The disc's files: see find_game_dir. Forward slashes work on both Windows
+ * and Linux.
  */
 #define YOUR_GAME_ENTRY_POINT   AMPED2_ENTRY_POINT  /* XBE entry point VA (per build) */
-#define YOUR_GAME_XBE_PATH      "game_files/default.xbe"
-#define YOUR_GAME_DIR            "game_files"
+#define YOUR_GAME_DIR_NAME      "game_files"
+
+/* The folder with the disc's files, found by find_game_dir. */
+static char s_game_dir[1024];
 
 /* ── Forward declarations ──────────────────────────────────── */
 
@@ -551,6 +553,13 @@ static void stall_sampler_start(void) {}   /* AMPED2_STALL_MS: POSIX only */
 static void  *s_xbe_data;
 static size_t s_xbe_size;
 
+/* The loaded XBE, for the window icon (src/title_image.c); NULL before boot. */
+const void *amped2_xbe_data(size_t *size)
+{
+    *size = s_xbe_size;
+    return s_xbe_data;
+}
+
 /* Steps 1-2: load the XBE and map the guest address space.
  *
  * Separate from boot_and_run because it has to happen before anything else
@@ -562,18 +571,80 @@ static size_t s_xbe_size;
  * "contiguous window at 0x80000000 ... failed (error 8)", then a fault in the
  * title's first physical allocation (sub_00184BEE). So the layout is mapped
  * here, on the main thread, before the window exists. */
+static int has_xbe(const char *dir)
+{
+    char path[1100];
+    FILE *f;
+
+    snprintf(path, sizeof path, "%s/default.xbe", dir);
+    if (!(f = fopen(path, "rb")))
+        return 0;
+    fclose(f);
+    return 1;
+}
+
+/* Where the disc's files are, in this order:
+ *   1. game_dir from the settings (settings.ini or AMPED2_GAME_DIR),
+ *   2. game_files next to the executable -- the release package, and the
+ *      program started from anywhere (a shortcut, a launcher),
+ *   3. game_files in the working directory -- scripts/run.sh, which starts
+ *      build/amped2_recomp from the repository root.
+ * 0 when none holds default.xbe (s_game_dir then names what was looked for). */
+static int find_game_dir(void)
+{
+    char exe[1024];
+    size_t n = 0;
+
+    if (g_amped2_settings.game_dir[0]) {
+        snprintf(s_game_dir, sizeof s_game_dir, "%s", g_amped2_settings.game_dir);
+        return has_xbe(s_game_dir);
+    }
+#ifdef _WIN32
+    n = GetModuleFileNameA(NULL, exe, sizeof exe);
+    if (n >= sizeof exe)
+        n = 0;
+#else
+    {
+        ssize_t r = readlink("/proc/self/exe", exe, sizeof exe - 1);
+        n = r > 0 ? (size_t)r : 0;
+    }
+#endif
+    while (n > 0 && exe[n - 1] != '/' && exe[n - 1] != '\\')
+        n--;                                    /* the executable's folder */
+    if (n > 0) {
+        exe[n] = '\0';
+        snprintf(s_game_dir, sizeof s_game_dir, "%s%s", exe, YOUR_GAME_DIR_NAME);
+        if (has_xbe(s_game_dir))
+            return 1;
+    }
+    snprintf(s_game_dir, sizeof s_game_dir, "%s", YOUR_GAME_DIR_NAME);
+    return has_xbe(s_game_dir);
+}
+
 static int boot_memory(void)
 {
     void *xbe_data = NULL;
     size_t xbe_size = 0;
+    char xbe_path[1100];
 
     printf("Loading XBE...\n");
 
     /* Step 1: Load XBE */
-    if (!load_xbe(YOUR_GAME_XBE_PATH, &xbe_data, &xbe_size)) {
-        fatal_message("Failed to load " YOUR_GAME_XBE_PATH ".\n"
-                      "Run from the repository root with the game files in "
-                      "'" YOUR_GAME_DIR "'.");
+    if (!find_game_dir()) {
+        char msg[1400];
+        snprintf(msg, sizeof msg,
+                 "default.xbe not found.\n\n"
+                 "Put the contents of your Amped 2 disc into a folder named '"
+                 YOUR_GAME_DIR_NAME "' next to the program, or set game_dir in\n%s\n"
+                 "to the folder that holds default.xbe.",
+                 amped2_settings_path());
+        fatal_message(msg);
+        return 1;
+    }
+    snprintf(xbe_path, sizeof xbe_path, "%s/default.xbe", s_game_dir);
+    printf("Game files: %s\n", s_game_dir);
+    if (!load_xbe(xbe_path, &xbe_data, &xbe_size)) {
+        fatal_message("default.xbe was found but could not be read.");
         return 1;
     }
     /* The recompiled code belongs to one disc: another build's default.xbe
@@ -591,7 +662,7 @@ static int boot_memory(void)
                      "This program is built for the %s disc of Amped 2, but\n%s\n"
                      "is from a different version (built %04d-%02d-%02d).\n\n"
                      "Download the build for your disc's version.",
-                     AMPED2_XBE_VERSION, YOUR_GAME_XBE_PATH, g ? g->tm_year + 1900 : 0,
+                     AMPED2_XBE_VERSION, xbe_path, g ? g->tm_year + 1900 : 0,
                      g ? g->tm_mon + 1 : 0, g ? g->tm_mday : 0);
             fatal_message(msg);
             free(xbe_data);
@@ -641,7 +712,7 @@ static int boot_and_run(void)
     /* Step 4: Set game directory for file I/O path translation */
     {
         extern void xbox_path_init(const char *game_dir, const char *save_dir);
-        xbox_path_init(YOUR_GAME_DIR, NULL);
+        xbox_path_init(s_game_dir, NULL);
     }
 
     /* Step 5: Initialize kernel bridge (thunk table in Xbox memory) */

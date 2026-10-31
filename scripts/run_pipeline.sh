@@ -52,5 +52,7 @@ if [[ "$STEP" =~ ^(all|recomp)$ ]]; then
   # instead). xbe_version.txt tells CMake which overrides.c belongs to this generated code.
   run python -m tools.recomp "$XBE" --all --split 250 --gen-dir "$GEN_DIR" --exclude-manual "$ROOT/src/version/$VERSION/overrides.c"
   echo "$VERSION" > "$GEN_DIR/xbe_version.txt"
+  # The exe's Windows icon from the disc's dashboard image (embedded by CMake when present; optional).
+  python "$ROOT/scripts/xbe_icon.py" "$XBE" "$GEN_DIR/amped2.ico" || echo "No icon extracted (optional)." >&2
 fi
 echo; echo "Done. Health report: scripts/doctor.sh"

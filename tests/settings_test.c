@@ -22,7 +22,7 @@ static int fails;
 
 static const char *const k_env[] = {
     "AMPED2_RESOLUTION_SCALE", "AMPED2_ASPECT_RATIO", "AMPED2_FRAMERATE",
-    "AMPED2_FRAME_LIMIT", "AMPED2_WINDOW_MODE", "AMPED2_DISPLAY" };
+    "AMPED2_FRAME_LIMIT", "AMPED2_WINDOW_MODE", "AMPED2_DISPLAY", "AMPED2_GAME_DIR" };
 
 /* An empty value counts as unset (settings.c skips it), so this also clears. */
 static void set_env(const char *name, const char *value)
@@ -157,6 +157,26 @@ static void test_env_overrides(void)
     clear_overrides();
 }
 
+/* game_dir: a path as written (spaces kept), quotes dropped, overridable. */
+static void test_game_dir(void)
+{
+    const Amped2Settings *s = &g_amped2_settings;
+
+    write_file("[paths]\ngame_dir =  C:\\Games\\Amped 2\\game_files  \n");
+    amped2_settings_load();
+    CHECK(!strcmp(s->game_dir, "C:\\Games\\Amped 2\\game_files"));
+    write_file("game_dir = \"D:\\Amped 2\"\n");
+    amped2_settings_load();
+    CHECK(!strcmp(s->game_dir, "D:\\Amped 2"));
+    write_file("game_dir =\n");
+    amped2_settings_load();
+    CHECK(s->game_dir[0] == '\0');
+    set_env("AMPED2_GAME_DIR", "/data/amped2");
+    amped2_settings_load();
+    CHECK(!strcmp(s->game_dir, "/data/amped2"));
+    clear_overrides();
+}
+
 static void round_trip(int scale, int aspect, int fps, int limit, int window, int display)
 {
     Amped2Settings *s = &g_amped2_settings;
@@ -206,6 +226,7 @@ int main(void)
     test_parse();
     test_invalid_values();
     test_env_overrides();
+    test_game_dir();
     test_round_trip();
     test_aspect();
 

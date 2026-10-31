@@ -71,6 +71,7 @@ static const uint32_t k_vsh_spv[] =
 #include "keyboard_sdl.h"     /* xboxrecomp/src/input */
 #include "vk_backend.h"
 #include "settings/settings.h"
+#include "title_image.h"
 
 #define VKB_MAX_SURFACES    16
 #define VKB_MAX_SWAP_IMAGES 8
@@ -970,12 +971,50 @@ static SDL_Window *open_window(const char *title)
     }
     win = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED_DISPLAY(d),
                            SDL_WINDOWPOS_CENTERED_DISPLAY(d), w, h, flags);
+    if (win) {
+        /* The game's dashboard title image from the player's XBE as the
+         * window / taskbar icon (no game art in the repository). */
+        extern const void *amped2_xbe_data(size_t *size);
+        static uint32_t icon[AMPED2_TITLE_IMAGE_MAX * AMPED2_TITLE_IMAGE_MAX];
+        size_t xbe_size;
+        const void *xbe = amped2_xbe_data(&xbe_size);
+        uint32_t iw, ih;
+        if (amped2_title_image(xbe, xbe_size, icon, &iw, &ih)) {
+            SDL_Surface *s = SDL_CreateRGBSurfaceWithFormatFrom(icon, (int)iw, (int)ih, 32,
+                                                                (int)iw * 4,
+                                                                SDL_PIXELFORMAT_ARGB8888);
+            if (s) {
+                SDL_SetWindowIcon(win, s);
+                SDL_FreeSurface(s);
+            }
+        }
+    }
     if (win)
         fprintf(stderr, "  [VK] window: %s on display %d (%s)\n",
                 g_amped2_settings.window_mode == AMPED2_FULLSCREEN ? "fullscreen"
                 : g_amped2_settings.window_mode == AMPED2_BORDERLESS ? "borderless" : "windowed",
                 d, SDL_GetDisplayName(d) ? SDL_GetDisplayName(d) : "?");
     return win;
+}
+
+/* The window mode and monitor as they are now, into settings.ini, so the next
+ * start opens the window the way the player left it. After a toggle (a crash
+ * later loses nothing) and on close. */
+static void remember_window(void)
+{
+    Uint32 f;
+    int mode, display;
+
+    if (!V.window)
+        return;
+    f = SDL_GetWindowFlags(V.window);
+    mode = (f & SDL_WINDOW_FULLSCREEN_DESKTOP) == SDL_WINDOW_FULLSCREEN_DESKTOP ? AMPED2_BORDERLESS
+         : (f & SDL_WINDOW_FULLSCREEN) ? AMPED2_FULLSCREEN : AMPED2_WINDOWED;
+    display = SDL_GetWindowDisplayIndex(V.window);
+    if (display < 0)
+        display = g_amped2_settings.display;
+    if (amped2_settings_save_window(mode, display) != 0)
+        fprintf(stderr, "  [VK] could not save the window mode to %s\n", amped2_settings_path());
 }
 
 /* Alt+Enter / F11: windowed <-> the configured fullscreen mode (borderless if
@@ -995,6 +1034,7 @@ static void toggle_fullscreen(void)
     }
     SDL_SetWindowFullscreen(V.window, to);
     V.swap_dirty = 1;
+    remember_window();
 }
 
 /* Window events both pumps share; 1 if the event was a window hotkey (kept
@@ -2291,6 +2331,7 @@ static void pump_events(void)
 
     while (SDL_PollEvent(&ev)) {
         if (ev.type == SDL_QUIT) {
+            remember_window();
             fprintf(stderr, "  [VK] window closed\n");
             fflush(stderr);
             _Exit(0);
@@ -2750,6 +2791,7 @@ int amped2_vk_host_main(int (*guest_main)(void))
                 if (ev.type == s_guest_done_event)
                     return s_guest_rc;
                 if (ev.type == SDL_QUIT) {
+                    remember_window();
                     fprintf(stderr, "  [VK] window closed\n");
                     fflush(stderr);
                     _Exit(0);
