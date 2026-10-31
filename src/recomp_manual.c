@@ -25,6 +25,8 @@
 #include <string.h>   /* strstr */
 #include <time.h>     /* timespec_get */
 
+#include "settings/settings.h"   /* the aspect ratio, for the camera hook */
+
 /* The runtime's register model and ICALL declarations. Use these rather than
  * spelling the externs out: g_eax, g_esp ... are thread-local (RECOMP_TLS),
  * and a plain `extern uint32_t g_eax` silently refers to the wrong storage. */
@@ -268,6 +270,42 @@ void amped2_boot_movie(const char *which, const char *skip_env, void (*play)(voi
     g_esp += 4;     /* ret */
 }
 
+/* The camera's aspect for screens wider than 16:9 (entry hook of the camera
+ * update, eax = the camera; NTSC-U 0x0015F7B0).
+ *
+ * In its 720p mode the game gives the ride camera a 16:9 aspect (float at
+ * +0x184, set by NTSC-U 0x001D82D0 next to the "projection dirty" byte at
+ * +0x170); projection and culling follow from it. For a wider setting the
+ * aspect becomes the setting's and the camera is marked dirty, so the game
+ * builds and culls a 21:9 view itself -- squeezed into its 1280 pixels, which
+ * the renderer stretches back across the widened surface (3D only; the HUD
+ * keeps its 16:9 middle). Only a camera at exactly 16:9 is touched: the menu
+ * cameras (4:3) and the square render-target cameras keep theirs.
+ * AMPED2_HD_CAMERA=0 turns it off. g_amped2_camera_aspect tells the renderer
+ * that the 3D view is wide. */
+volatile float g_amped2_camera_aspect;
+
+void amped2_camera_aspect_hook(void)
+{
+    static float target = -1.0f;
+    uint32_t cam = g_eax, bits;
+
+    if (target < 0.0f) {
+        const char *off = getenv("AMPED2_HD_CAMERA");
+        float a = (float)amped2_aspect_value(g_amped2_settings.aspect_ratio);
+        int on = env_flag("AMPED2_HD") && !(off && *off == '0');
+        target = on && a > 16.0f / 9.0f + 0.01f ? a : 0.0f;
+    }
+    if (target == 0.0f || !cam || MEM32(cam + 0x184) != 0x3FE38E39u)   /* 16:9 */
+        return;
+    memcpy(&bits, &target, 4);
+    MEM32(cam + 0x184) = bits;
+    MEM8(cam + 0x170) = 1;                  /* projection dirty: rebuilt below */
+    if (g_amped2_camera_aspect != target)
+        fprintf(stderr, "[VIDEO] ride camera: 16:9 -> %.3f (culls for the full width)\n", target);
+    g_amped2_camera_aspect = target;
+}
+
 /* The game's "launch another XBE" routine (cdecl: path, launch data), which
  * ends in XLaunchNewImage. Only default.xbe is recompiled, so a hand-off ends
  * the port. Two callers matter:
@@ -299,8 +337,9 @@ void amped2_launch_xbe(void (*launch)(void))
         g_esp += 4;                         /* cdecl: ret */
         return;
     }
-    fprintf(stderr, "[LAUNCH] the game launches %s%s -- the port ends here\n", path,
-            strstr(path, "boom.xbe") ? " (its fatal-error program: something failed above)" : "");
+    fprintf(stderr, "[LAUNCH] the game launches %s%s, called from 0x%08X -- the port ends here\n",
+            path, strstr(path, "boom.xbe") ? " (its fatal-error program: something failed above)" : "",
+            MEM32(g_esp));
     fflush(stderr);
     launch();
 }

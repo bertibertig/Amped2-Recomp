@@ -868,6 +868,29 @@ static int load_settings(int want_tui)
         setenv("RECOMP_FLIP_VSYNC", "0", 1);
 #endif
     }
+    /* Native HD: the game's own 720p widescreen mode (1280x720, a 16:9
+     * camera that culls for it, a 16:9 HUD layout). On for aspect ratios of
+     * 16:9 and wider where this build knows the camera (AMPED2_NATIVE_HD);
+     * 4:3 and 16:10 keep the SD mode. AMPED2_HD=0 / 1 overrides. It needs the
+     * console's HD permissions from the runtime (RECOMP_VIDEO_HD: D3D checks
+     * them before it creates a 1280x720 device, XAPI's XGetVideoFlags reports
+     * them); the camera hook reads AMPED2_HD. Both are set either way, so an
+     * inherited RECOMP_VIDEO_HD cannot leave the game in HD. */
+    {
+        const char *hd = getenv("AMPED2_HD");
+        int on = hd && *hd ? *hd == '1'
+               : AMPED2_NATIVE_HD
+                 && amped2_aspect_value(g_amped2_settings.aspect_ratio) >= 16.0 / 9.0 - 0.01;
+        if (on)
+            printf("[VIDEO] native HD: the game's 720p widescreen mode\n");
+#ifdef _WIN32
+        _putenv(on ? "AMPED2_HD=1" : "AMPED2_HD=0");
+        _putenv(on ? "RECOMP_VIDEO_HD=1" : "RECOMP_VIDEO_HD=0");
+#else
+        setenv("AMPED2_HD", on ? "1" : "0", 1);
+        setenv("RECOMP_VIDEO_HD", on ? "1" : "0", 1);
+#endif
+    }
     return 0;
 }
 

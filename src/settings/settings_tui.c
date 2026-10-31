@@ -10,6 +10,7 @@
  * the settings saved, S saves, Esc/Q leaves (asks when something is unsaved).
  */
 #include "settings.h"
+#include "amped2_addrs.h"     /* AMPED2_NATIVE_HD: this build's disc version */
 
 #if defined(AMPED2_HAVE_VULKAN)
 #include <SDL.h>                /* the display list (the Vulkan build links SDL2) */
@@ -268,7 +269,11 @@ static int  g_scale(void)          { return S.resolution_scale - 1; }
 static void s_scale(int i)         { S.resolution_scale = i + 1; }
 static void t_scale(int i, char *b, size_t n)
 {
-    int h = 480 * (i + 1), w = (int)(h * amped2_aspect_value(S.aspect_ratio) + 0.5);
+    /* The game's own resolution: 640x480, or 1280x720 in its 720p mode
+     * (16:9 and wider, where this build supports it -- main.c). */
+    double aspect = amped2_aspect_value(S.aspect_ratio);
+    int base = AMPED2_NATIVE_HD && aspect >= 16.0 / 9.0 - 0.01 ? 720 : 480;
+    int h = base * (i + 1), w = (int)(h * aspect + 0.5);
     snprintf(b, n, "%dx  (%d x %d)%s", i + 1, w, h, i == 0 ? "  original" : "");
 }
 
@@ -341,17 +346,19 @@ static int  e_display(void)        { return S.window_mode != AMPED2_WINDOWED; }
 static const Option k_res_opts[] = {
     { "Internal resolution",
       "The resolution the game is drawn at before it is scaled to the window. "
-      "1x is the Xbox's 640x480; every step multiplies both sides. Higher values "
+      "1x is the Xbox's 640x480 (1280x720 when the game runs its 720p widescreen "
+      "mode, at 16:9 and wider); every step multiplies both sides. Higher values "
       "sharpen edges and distant detail and cost GPU time (5x is 25 times the "
       "pixels of 1x per frame).",
       n_scale, t_scale, g_scale, s_scale, NULL },
 };
 static const Option k_aspect_opts[] = {
     { "Aspect ratio",
-      "Rides get wider: more of the slope at the sides (Hor+), the height of "
-      "the view stays as on the Xbox. The HUD keeps its 4:3 shape in the middle; "
-      "menus and movies stay 4:3 with black bars. Objects at the far edges can "
-      "pop in, as the game only draws what its original 4:3 view could see.",
+      "16:9 and wider use the game's own 720p widescreen mode: a wider view, "
+      "culled for it, with the game's 16:9 HUD layout; 21:9 widens it further "
+      "(the HUD stays 16:9 in the middle). Menus are the game's own 720p "
+      "menus, drawn stretched as on the Xbox. 16:10 keeps the original 4:3 "
+      "game and shows more at the sides, where objects can pop in.",
       n_aspect, t_aspect, g_aspect, s_aspect, NULL },
 };
 static const Option k_fps_opts[] = {

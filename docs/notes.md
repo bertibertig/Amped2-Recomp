@@ -636,3 +636,26 @@ _(date – what was done, what was found, next step)_
     was stretched to 21:9 (its ellipse at 4:3 is the original design, checked at 4:3).
   - Not ours: trees vanish up close at the widescreen sides with the clip off too – the game culls with its 4:3 view.
     Lead: the camera's aspect field (+0x184, 4:3 in 0x0015F825 / 0x001D8361 on NTSC-U).
+- 2026-10-30 – **Native HD widescreen: the game's own 720p mode, extended to 21:9 (NTSC-U).**
+  - Amped 2 has a 720p mode: its D3D setup (NTSC-U 0x00139515) picks 1280x720 progressive when `XGetVideoFlags`
+    (0x00263489) allows 720p, unless the language is Japanese (`XGetLanguage` 0x00254407 == 2). The display object
+    `[0x0038CAF4]` (+0x1380 width, +0x1384 height, set by 0x000B0F40) then makes the ride camera 16:9 (0x001D82D0 writes
+    0x3FE38E39 to the camera's aspect +0x184 when the width is 1280) – projection, culling and the HUD layout follow.
+  - The runtime answered like an SD console, so the game never took it. Forcing `XGetVideoFlags` alone made D3D's
+    `CreateDevice` (0x00328D50) refuse 1280x720 and the game launch its error program `Boom.xbe`. Runtime patch 0004:
+    the HD permissions (widescreen 0x00010000, 720p 0x00020000, 480p 0x00080000) in `XC_VIDEO` and in the AV
+    capabilities word D3D checks, `HalBootSMCVideoMode` 1 (HDTV cable, which `XGetVideoFlags` requires), index 0x103
+    (NTSC-M) – all with `RECOMP_VIDEO_HD=1` only. Then the game runs 1280x720 by itself (`SetDisplayMode` pitch 5120).
+  - main.c: native HD for aspect ratios of 16:9 and wider where the build supports it (`AMPED2_NATIVE_HD`, NTSC-U 1,
+    PAL 0 – the camera hook is not located for PAL); `AMPED2_HD=0/1` overrides; sets `AMPED2_HD` and `RECOMP_VIDEO_HD`
+    together. 4:3 and 16:10 keep the SD path.
+  - 21:9: an entry hook on the camera update (0x0015F7B0, eax = camera; `sub_0015F7B0_enter`) replaces an aspect of
+    exactly 16:9 with the setting's and marks the projection dirty (+0x170): the game builds and culls a 21:9 view in its
+    1280 pixels. The back end widens per surface from its own shape (4:3 SD, 16:9 HD; 1.3125 for 21:9) and draws 3D
+    unnarrowed when the camera is wide (`camera_wide`), 2D overlays narrowed (and clipped in rides) to the 16:9 middle.
+    Menus too: the menu's rider preview has a 16:9 camera the hook widens. `AMPED2_HD_CAMERA=0` turns the hook off.
+  - Movies: the overlay's output rectangle is in the shown screen's coordinates (1280x720 in HD); the 640x480 canvas
+    kept the movie's top-left part, zoomed. The canvas now follows the shown back buffer.
+  - User test (21:9, 2x): trees and the sides correct across the full width, natural proportions, HUD fine, movies
+    whole, ~70 fps median. The game's own 720p menus are stretched (4:3 art; the original does that too, RE-Amped2 –
+    MIT – reports the same and draws text at its own proportions). Resolution scale now multiplies 720p (2x ≈ 1440p).

@@ -9,6 +9,7 @@
 
 #define AMPED2_XBE_VERSION      "NTSC-U"
 #define AMPED2_XBE_TIMESTAMP    0x3F79CB6Fu  /* header +0x114: built 2003-09-30 18:29:03 UTC */
+#define AMPED2_NATIVE_HD        1            /* the game's 720p widescreen by default: camera aspect hook at 0x0015F7B0 */
 #define AMPED2_ENTRY_POINT      0x00254589u  /* XBE entry point VA (debug-key encoded in this dump's header) */
 #define AMPED2_D3D_DEVICE_PTR   0x0032CBF8u  /* D3D global device pointer: `mov esi, [0x32CBF8]` in 0x0031E4E0 */
 #define AMPED2_PB_RECORDS       0x0032A9C0u  /* `lea eax, [eax*4 + 0x32A9C0]` (20-byte records) at 0x00322666 */

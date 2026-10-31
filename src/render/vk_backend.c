@@ -88,6 +88,8 @@ typedef struct {
     uint32_t       gw, gh;                 /* the guest surface's size */
     uint32_t       logical_w, logical_h;   /* guest width/aa_sx, height/aa_sy */
     int            wide;                   /* widened to the aspect ratio */
+    double         widen;                  /* its width factor: aspect ratio / the
+                                            * surface's own (4:3 SD, 16:9 HD), >= 1 */
     VkImage        image;
     VkDeviceMemory memory;
     VkImageView    view;
@@ -209,8 +211,8 @@ static struct {
     VkbSurface       *last;                /* last surface cleared/drawn */
     uint32_t          flips;
     uint32_t          scale;               /* resolution scale (settings) */
-    double            widen;               /* aspect ratio / (4/3), >= 1 */
-    int               scissor_43;          /* scissor is the 4:3 middle (set_scissor) */
+    double            aspect;              /* the aspect ratio setting, width / height */
+    int               scissor_mid;         /* scissor is the un-widened middle (set_scissor) */
     uint32_t          shown_va[4];         /* surfaces the title has flipped */
     uint32_t          rt_flip;             /* last flip with draws off screen, +1 */
     VkPresentModeKHR  present_mode;
@@ -266,7 +268,8 @@ static struct {
     VkDeviceMemory    ov_memory;
     VkImageView       ov_view;
     VkImageLayout     ov_layout;
-    uint32_t         *ov_host;             /* VKB_OV_W x VKB_OV_H XRGB */
+    uint32_t         *ov_host;             /* ov_w x ov_h XRGB */
+    uint32_t          ov_w, ov_h;          /* overlay canvas: the shown screen's size */
     uint64_t          ov_uploaded;         /* overlay seq in ov_image */
     uint64_t          ov_presented;        /* overlay seq last presented */
 } V;
@@ -1117,9 +1120,7 @@ static int init_vulkan(void)
     V.scale = (uint32_t)g_amped2_settings.resolution_scale;
     if (V.scale < 1 || V.scale > AMPED2_SCALE_MAX)
         V.scale = 1;
-    V.widen = amped2_aspect_value(g_amped2_settings.aspect_ratio) / (4.0 / 3.0);
-    if (V.widen < 1.0)
-        V.widen = 1.0;
+    V.aspect = amped2_aspect_value(g_amped2_settings.aspect_ratio);
     fprintf(stderr, "  [VK] internal resolution %ux, aspect ratio %s\n", V.scale,
             amped2_aspect_name(g_amped2_settings.aspect_ratio));
     V.dump_prefix = getenv("AMPED2_VK_DUMP");
@@ -1220,7 +1221,11 @@ static void note_shown(uint32_t va)
 static VkbSurface *surface_get(const Nv2aSurface *g)
 {
     VkbSurface *s, *victim = NULL;
-    int i, wide = V.widen > 1.0 && surface_shown(g->color_va);
+    /* Widened from the surface's own shape: 4:3 for the SD back buffer,
+     * 16:9 when the title runs its 720p mode (then a 16:9 setting needs none). */
+    uint32_t lw = g->width / (g->aa_sx ? g->aa_sx : 1), lh = g->height / (g->aa_sy ? g->aa_sy : 1);
+    double widen = lw && lh ? V.aspect / ((double)lw / (double)lh) : 1.0;
+    int i, wide = widen > 1.01 && surface_shown(g->color_va);
 
     for (i = 0; i < VKB_MAX_SURFACES; i++) {
         s = &V.surfaces[i];
@@ -1257,10 +1262,11 @@ static VkbSurface *surface_get(const Nv2aSurface *g)
     s->gw = g->width;
     s->gh = g->height;
     s->wide = wide;
+    s->widen = wide ? widen : 1.0;
     s->width = g->width * V.scale;
     s->height = g->height * V.scale;
     if (wide)
-        s->width = (uint32_t)((double)s->width * V.widen + 0.5) & ~1u;
+        s->width = (uint32_t)((double)s->width * s->widen + 0.5) & ~1u;
     if (!image_create(s->width, s->height, VK_FORMAT_B8G8R8A8_UNORM,
                       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT
                       | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
@@ -1269,8 +1275,8 @@ static VkbSurface *surface_get(const Nv2aSurface *g)
         return NULL;
     }
     s->va = g->color_va;
-    s->logical_w = g->width / (g->aa_sx ? g->aa_sx : 1);
-    s->logical_h = g->height / (g->aa_sy ? g->aa_sy : 1);
+    s->logical_w = lw;
+    s->logical_h = lh;
     s->layout = VK_IMAGE_LAYOUT_UNDEFINED;
     s->last_used = V.flips;
     fprintf(stderr, "  [VK] surface 0x%08X %ux%u (logical %ux%u) as %ux%u%s\n",
@@ -1387,29 +1393,30 @@ static void begin_rendering(VkbSurface *c, VkbDepth *d)
     sc.offset.x = 0; sc.offset.y = 0;
     sc.extent.width = c->width; sc.extent.height = c->height;
     vkCmdSetScissor(V.cmd, 0, 1, &sc);
-    V.scissor_43 = 0;
+    V.scissor_mid = 0;
 }
 
-/* The scissor for the next draw: the whole surface, or (middle43) only the
- * 4:3 middle of a widened one -- what a 4:3 screen showed. Set only when it
- * changes; begin_rendering resets it to the whole surface. */
-static void set_scissor(const VkbSurface *s, int middle43)
+/* The scissor for the next draw: the whole surface, or (middle) only the
+ * un-widened middle of a widened one -- what the original screen showed (4:3
+ * in SD, 16:9 in the 720p mode). Set only when it changes; begin_rendering
+ * resets it to the whole surface. */
+static void set_scissor(const VkbSurface *s, int middle)
 {
     VkRect2D sc;
 
-    if (middle43 == V.scissor_43)
+    if (middle == V.scissor_mid)
         return;
     sc.offset.x = 0;
     sc.offset.y = 0;
     sc.extent.width = s->width;
     sc.extent.height = s->height;
-    if (middle43) {
-        uint32_t w43 = (uint32_t)((double)s->width / V.widen + 0.5);
-        sc.offset.x = (int32_t)(s->width - w43) / 2;
-        sc.extent.width = w43;
+    if (middle) {
+        uint32_t mid_w = (uint32_t)((double)s->width / s->widen + 0.5);
+        sc.offset.x = (int32_t)(s->width - mid_w) / 2;
+        sc.extent.width = mid_w;
     }
     vkCmdSetScissor(V.cmd, 0, 1, &sc);
-    V.scissor_43 = middle43;
+    V.scissor_mid = middle;
 }
 
 /* ---- textures ------------------------------------------------------------ */
@@ -2215,7 +2222,7 @@ static void draw_frag_state(const Nv2aBatch *b, VkbDrawCtx *c)
     /* Vertices are in guest surface pixels, whatever size the image has. */
     c->pc.surface_size[0] = (float)c->s->gw;
     c->pc.surface_size[1] = (float)c->s->gh;
-    c->pc.x3d = c->s->wide ? (float)(1.0 / V.widen) : 1.0f;
+    c->pc.x3d = c->s->wide ? (float)(1.0 / c->s->widen) : 1.0f;
     c->pc.tex_size[0] = (!c->use_rc && c->views[0]) ? (float)b->texture->width : 1.0f;
     c->pc.tex_size[1] = (!c->use_rc && c->views[0]) ? (float)b->texture->height : 1.0f;
     c->pc.z_scale = 1.0f / 16777215.0f;
@@ -2274,26 +2281,46 @@ static int covers_guest_screen(const Nv2aBatch *b, const VkbSurface *s)
  * and the GUI, drawn in 640x480 screen coordinates. The game parks hidden
  * elements off screen (a camera counter at the bottom right past x 640,
  * flown-out panels): invisible on a 4:3 screen, but inside the sides of a
- * widened one. Such draws are clipped to the 4:3 middle (set_scissor); the
- * world and its particles test depth and keep filling the sides.
- * AMPED2_VK_HUD_CLIP=0 turns it off. */
+ * widened one. Such draws keep the original middle's proportions and are
+ * clipped to it in rides (set_scissor, hud_clip); the world and its
+ * particles test depth and keep filling the sides. */
 static int overlay_2d(const Nv2aBatch *b)
 {
-    static int on = -1;
     float r0 = 1e9f, r1 = -1e9f;
     uint32_t i;
 
-    if (on < 0) {
-        const char *e = getenv("AMPED2_VK_HUD_CLIP");
-        on = !(e && *e == '0');
-    }
-    if (!on || b->state->depth_test_enable || !b->count)
+    if (b->state->depth_test_enable || !b->count)
         return 0;
     for (i = 0; i < b->count; i++) {
         if (b->vertices[i].rhw < r0) r0 = b->vertices[i].rhw;
         if (b->vertices[i].rhw > r1) r1 = b->vertices[i].rhw;
     }
     return r1 - r0 <= 1e-5f * r1;
+}
+
+/* Whether the game's cameras already render the setting's aspect (squeezed
+ * into its 1280 pixels; amped2_camera_aspect_hook): 3D is then drawn across
+ * the whole widened surface instead of narrowed into the middle -- in rides
+ * and in the menus alike (the menu's rider preview has a 16:9 camera too,
+ * which the hook widens; a menu shows the middle of the surface). */
+extern volatile float g_amped2_camera_aspect;
+
+static int camera_wide(const VkbSurface *s)
+{
+    return g_amped2_camera_aspect > 0.0f && s->wide;
+}
+
+/* AMPED2_VK_HUD_CLIP=0: overlays are not clipped to the middle (they still
+ * keep its proportions) -- for comparisons. */
+static int hud_clip(void)
+{
+    static int on = -1;
+
+    if (on < 0) {
+        const char *e = getenv("AMPED2_VK_HUD_CLIP");
+        on = !(e && *e == '0');
+    }
+    return on;
 }
 
 /* Whether the batch's colour target is a widened back buffer. */
@@ -2316,7 +2343,7 @@ static void vkb_draw(const Nv2aSurface *g, const Nv2aBatch *b)
     VkBuffer vbufs[2];
     const Nv2aBatchExt *e;
     void *dst, *edst;
-    int fullscreen;
+    int fullscreen, overlay;
 
     if (!b->count || !draw_prepare(g, b, &c))
         return;
@@ -2357,9 +2384,12 @@ static void vkb_draw(const Nv2aSurface *g, const Nv2aBatch *b)
     bind_pipeline(V.pipeline);
     apply_state(b->state);
     draw_frag_state(b, &c);
+    overlay = c.s->wide && overlay_2d(b);
     if (fullscreen)
         c.pc.x3d = 1.0f;                        /* full-screen fade: edge to edge */
-    set_scissor(c.s, !fullscreen && c.s->wide && in_ride() && overlay_2d(b));
+    else if (camera_wide(c.s) && !overlay)
+        c.pc.x3d = 1.0f;                        /* the game's own wide view: stretched back */
+    set_scissor(c.s, !fullscreen && overlay && in_ride() && hud_clip());
     vkCmdPushDescriptorSetKHR(V.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, V.pipe_layout,
                               0, VKB_NBIND, c.w);
     vkCmdPushConstants(V.cmd, V.pipe_layout,
@@ -2394,7 +2424,7 @@ static int vkb_draw_program(const Nv2aSurface *g, const Nv2aBatch *b,
      * stretch a full-screen fade edge to edge (covers_guest_screen). So do
      * 2D overlays (depth test off: the HUD), which vkb_draw clips to the 4:3
      * middle (overlay_2d). A handful of batches per frame. */
-    if (in_ride() && (p->index_count <= 6 || !b->state->depth_test_enable) && target_wide(g))
+    if (target_wide(g) && ((in_ride() && p->index_count <= 6) || !b->state->depth_test_enable))
         return 0;
     if (!draw_prepare(g, b, &c))
         return 1;                           /* nothing to draw into: dropped, as draw */
@@ -2482,6 +2512,8 @@ static int vkb_draw_program(const Nv2aSurface *g, const Nv2aBatch *b,
     bind_pipeline(V.pipeline_vsh);
     apply_state(b->state);
     draw_frag_state(b, &c);
+    if (camera_wide(c.s))
+        c.pc.x3d = 1.0f;                    /* the game's own wide view: stretched back */
     set_scissor(c.s, 0);                    /* 3D: the whole widened surface */
     {
         static const uint32_t bindings[4] = { VKB_BIND_VCONST, VKB_BIND_VPROG,
@@ -2547,7 +2579,7 @@ static void fit_rect(const VkbSurface *s, VkOffset3D out[2])
 {
     double sw = (double)V.swap_extent.width, sh = (double)V.swap_extent.height;
     double aspect = (double)s->logical_w / (double)s->logical_h
-                  * (s->wide && in_ride() ? V.widen : 1.0);
+                  * (s->wide && in_ride() ? s->widen : 1.0);
     double w = sw, h = sw / aspect;
 
     if (h > sh) { h = sh; w = sh * aspect; }
@@ -2622,12 +2654,32 @@ static int overlay_record(VkImage img)
     VkImageBlit blit;
     uint64_t seq;
 
+    uint32_t cw = VKB_OV_W, ch = VKB_OV_H;
+
     if (!nv2a_overlay_active())
         return 0;
+    /* The canvas is the screen the title shows: the overlay's output
+     * rectangle is in its coordinates (1280x720 in the 720p mode, where a
+     * 640x480 canvas kept only the movie's top-left part, zoomed). */
+    if (V.last && V.last->logical_w && V.last->logical_h) {
+        cw = V.last->logical_w;
+        ch = V.last->logical_h;
+    }
+    if (V.ov_image && (cw != V.ov_w || ch != V.ov_h)) {
+        vkDeviceWaitIdle(V.device);
+        vkDestroyImageView(V.device, V.ov_view, NULL);
+        vkDestroyImage(V.device, V.ov_image, NULL);
+        vkFreeMemory(V.device, V.ov_memory, NULL);
+        free(V.ov_host);
+        V.ov_host = NULL;
+        V.ov_image = VK_NULL_HANDLE;
+    }
     if (!V.ov_image) {
-        V.ov_host = (uint32_t *)malloc((size_t)VKB_OV_W * VKB_OV_H * 4u);
+        V.ov_w = cw;
+        V.ov_h = ch;
+        V.ov_host = (uint32_t *)malloc((size_t)V.ov_w * V.ov_h * 4u);
         if (!V.ov_host
-                || !image_create(VKB_OV_W, VKB_OV_H, VK_FORMAT_B8G8R8A8_UNORM,
+                || !image_create(V.ov_w, V.ov_h, VK_FORMAT_B8G8R8A8_UNORM,
                                  VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                                  VK_IMAGE_ASPECT_COLOR_BIT, &V.ov_image, &V.ov_memory,
                                  &V.ov_view)) {
@@ -2643,20 +2695,20 @@ static int overlay_record(VkImage img)
     seq = nv2a_overlay_seq();
     if (seq != V.ov_uploaded) {
         VkBufferImageCopy region;
-        memset(V.ov_host, 0, (size_t)VKB_OV_W * VKB_OV_H * 4u);
-        nv2a_overlay_compose_xrgb(V.ov_host, VKB_OV_W, VKB_OV_H, VKB_OV_W);
-        dst = ring_alloc(&V.staging, (VkDeviceSize)VKB_OV_W * VKB_OV_H * 4u, 16, &off);
+        memset(V.ov_host, 0, (size_t)V.ov_w * V.ov_h * 4u);
+        nv2a_overlay_compose_xrgb(V.ov_host, V.ov_w, V.ov_h, V.ov_w);
+        dst = ring_alloc(&V.staging, (VkDeviceSize)V.ov_w * V.ov_h * 4u, 16, &off);
         if (!dst)
             return 0;
-        memcpy(dst, V.ov_host, (size_t)VKB_OV_W * VKB_OV_H * 4u);   /* XRGB LE = B,G,R,X */
+        memcpy(dst, V.ov_host, (size_t)V.ov_w * V.ov_h * 4u);   /* XRGB LE = B,G,R,X */
         transition(V.ov_image, VK_IMAGE_ASPECT_COLOR_BIT, V.ov_layout,
                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         memset(&region, 0, sizeof region);
         region.bufferOffset = off;
         region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         region.imageSubresource.layerCount = 1;
-        region.imageExtent.width = VKB_OV_W;
-        region.imageExtent.height = VKB_OV_H;
+        region.imageExtent.width = V.ov_w;
+        region.imageExtent.height = V.ov_h;
         region.imageExtent.depth = 1;
         vkCmdCopyBufferToImage(V.cmd, V.staging.buffer, V.ov_image,
                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
@@ -2670,11 +2722,11 @@ static int overlay_record(VkImage img)
     memset(&blit, 0, sizeof blit);
     blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     blit.srcSubresource.layerCount = 1;
-    blit.srcOffsets[1].x = (int32_t)VKB_OV_W;
-    blit.srcOffsets[1].y = (int32_t)VKB_OV_H;
+    blit.srcOffsets[1].x = (int32_t)V.ov_w;
+    blit.srcOffsets[1].y = (int32_t)V.ov_h;
     blit.srcOffsets[1].z = 1;
     blit.dstSubresource = blit.srcSubresource;
-    fit_wh(VKB_OV_W, VKB_OV_H, blit.dstOffsets);
+    fit_wh(V.ov_w, V.ov_h, blit.dstOffsets);
     vkCmdBlitImage(V.cmd, V.ov_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                    img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
                    VK_FILTER_LINEAR);
@@ -2802,14 +2854,14 @@ static void present(int real_flip)
             if (was != in_ride()) {
                 was = in_ride();
                 fprintf(stderr, "  [VK] flip %u: presenting %s\n", V.flips,
-                        was ? "wide (ride)" : "4:3 (menu)");
+                        was ? "wide (ride)" : "the middle (menu)");
             }
         }
         if (s->wide && !in_ride()) {
-            /* A menu on a widened surface: its 4:3 middle. */
-            int32_t w43 = (int32_t)((double)s->width / V.widen + 0.5);
-            blit.srcOffsets[0].x = ((int32_t)s->width - w43) / 2;
-            blit.srcOffsets[1].x = blit.srcOffsets[0].x + w43;
+            /* A menu on a widened surface: its un-widened middle. */
+            int32_t mid_w = (int32_t)((double)s->width / s->widen + 0.5);
+            blit.srcOffsets[0].x = ((int32_t)s->width - mid_w) / 2;
+            blit.srcOffsets[1].x = blit.srcOffsets[0].x + mid_w;
         }
         blit.dstSubresource = blit.srcSubresource;
         fit_rect(s, blit.dstOffsets);

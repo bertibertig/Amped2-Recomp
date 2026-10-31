@@ -1,0 +1,103 @@
+diff --git a/src/kernel/kernel_bridge.c b/src/kernel/kernel_bridge.c
+index 450fcfb..9314abd 100644
+--- a/src/kernel/kernel_bridge.c
++++ b/src/kernel/kernel_bridge.c
+@@ -290,8 +290,14 @@ static void kernel_data_init(void)
+     BRIDGE_MEM32(XBOX_KERNEL_DATA_BASE + KDATA_TIME_INCREMENT) = 0x2710;
+ 
+     /* HalBootSMCVideoMode (ordinal 356) - SMC video mode word from boot. 0 is
+-     * "no video mode reported", which titles treat as auto-detect. */
+-    BRIDGE_MEM32(XBOX_KERNEL_DATA_BASE + KDATA_BOOT_SMC_VIDEO) = 0;
++     * "no video mode reported", which titles treat as auto-detect. With the
++     * HD permissions on (RECOMP_VIDEO_HD, kernel_xbox.c) it is 1, the SMC's
++     * code for an HDTV cable: XAPI's XGetVideoFlags keeps the HD flags only
++     * for that cable. */
++    {
++        extern ULONG xbox_VideoUserFlags(void);
++        BRIDGE_MEM32(XBOX_KERNEL_DATA_BASE + KDATA_BOOT_SMC_VIDEO) = xbox_VideoUserFlags() ? 1 : 0;
++    }
+ 
+     /* IdexChannelObject is a structure, not an opaque pointer. Guest file-close
+      * code walks DeviceQueue.DeviceListHead at +0x28. Host-backed synchronous
+diff --git a/src/kernel/kernel_hal.c b/src/kernel/kernel_hal.c
+index ea103db..4a7bb87 100644
+--- a/src/kernel/kernel_hal.c
++++ b/src/kernel/kernel_hal.c
+@@ -836,6 +836,12 @@ VOID __stdcall xbox_AvSendTVEncoderOption(
+         *Result = AV_PACK_HDTV
+                 | (AV_STANDARD_NTSC_M << AV_STANDARD_SHIFT)
+                 | AV_REFRESH_60Hz;
++        /* The user's HD permissions (RECOMP_VIDEO_HD, kernel_xbox.c): D3D
++         * accepts 480p/720p only when this word carries them. */
++        {
++            extern ULONG xbox_VideoUserFlags(void);
++            *Result |= xbox_VideoUserFlags();
++        }
+         break;
+ 
+     case AV_OPTION_QUERY_MODE:
+diff --git a/src/kernel/kernel_xbox.c b/src/kernel/kernel_xbox.c
+index 4ebdfb9..8e1630b 100644
+--- a/src/kernel/kernel_xbox.c
++++ b/src/kernel/kernel_xbox.c
+@@ -10,6 +10,7 @@
+  */
+ 
+ #include "kernel.h"
++#include <stdlib.h>                     /* getenv: RECOMP_VIDEO_HD */
+ #include <string.h>
+ 
+ /* ============================================================================
+@@ -125,6 +126,24 @@ NTSTATUS __stdcall xbox_XeUnloadSection(PXBE_SECTION_HEADER Section)
+  *   - DVD Region: Region 1 (North America)
+  * ============================================================================ */
+ 
++/* The user's HD video permissions, in the console's own layout: the EEPROM's
++ * video flags (XC_VIDEO) and the AV capabilities word D3D checks a mode
++ * against both carry them from bit 16 -- widescreen 0x00010000, 720p
++ * 0x00020000, 1080i 0x00040000, 480p 0x00080000. Without them D3D refuses
++ * every HD mode (CreateDevice fails) and XGetVideoFlags reports 4:3 SDTV.
++ * Off unless RECOMP_VIDEO_HD=1: a title that offers HD then switches to it,
++ * which changes its output resolution and layout. */
++ULONG xbox_VideoUserFlags(void)
++{
++    static int hd = -1;
++
++    if (hd < 0) {
++        const char *e = getenv("RECOMP_VIDEO_HD");
++        hd = e && *e == '1';
++    }
++    return hd ? 0x00010000u | 0x00020000u | 0x00080000u : 0;  /* widescreen, 720p, 480p */
++}
++
+ NTSTATUS __stdcall xbox_ExQueryNonVolatileSetting(
+     ULONG ValueIndex, PULONG Type, PVOID Value, ULONG ValueLength, PULONG ResultLength)
+ {
+@@ -147,7 +166,8 @@ NTSTATUS __stdcall xbox_ExQueryNonVolatileSetting(
+     case XC_VIDEO:
+         /* NTSC with widescreen and HDTV support enabled */
+         if (ValueLength >= sizeof(ULONG)) {
+-            *(PULONG)Value = XC_VIDEO_FLAGS_WIDESCREEN | XC_VIDEO_FLAGS_HDTV;
++            *(PULONG)Value = XC_VIDEO_FLAGS_WIDESCREEN | XC_VIDEO_FLAGS_HDTV
++                           | xbox_VideoUserFlags();
+             if (Type) *Type = 4; /* REG_DWORD */
+             if (ResultLength) *ResultLength = sizeof(ULONG);
+         }
+@@ -202,6 +222,17 @@ NTSTATUS __stdcall xbox_ExQueryNonVolatileSetting(
+         }
+         break;
+ 
++    case 0x103:
++        /* XC_FACTORY_AV_REGION: the factory video standard, NTSC-M 60 Hz --
++         * the standard AvSendTVEncoderOption reports. XAPI reads its second
++         * byte as the standard (it clears the HD flags on PAL). */
++        if (ValueLength >= sizeof(ULONG)) {
++            *(PULONG)Value = 0x00400100;
++            if (Type) *Type = 4;
++            if (ResultLength) *ResultLength = sizeof(ULONG);
++        }
++        break;
++
+     default:
+         xbox_log(XBOX_LOG_WARN, XBOX_LOG_XBOX,
+             "ExQueryNonVolatileSetting: unhandled index 0x%02X", ValueIndex);

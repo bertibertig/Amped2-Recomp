@@ -151,3 +151,17 @@ Verified: Linux build + Windows cross build (MinGW) compile; own decoder test (8
   Amped 2 (NTSC-U, Windows): after a ride the boarder's face texture went to physical 0x01544900 while heap page
   0x01544000 was still named for sound data; the face sampled heap bytes as DXT and showed block noise. Vertex arrays
   keep `dma_resolve` (a title can put those in the heap). Applies on top of 0001 (same file).
+
+## 0004 – HD video permissions for a title's native 720p mode
+- `src/kernel/kernel_xbox.c`: `xbox_VideoUserFlags()` – the user's HD permissions in the console's own layout
+  (widescreen 0x00010000, 720p 0x00020000, 480p 0x00080000), only with `RECOMP_VIDEO_HD=1`. Added to `XC_VIDEO`
+  (`ExQueryNonVolatileSetting`), whose flags XAPI's `XGetVideoFlags` reads from bit 16; the runtime's own low bits stay.
+  New index 0x103 (`XC_FACTORY_AV_REGION`): NTSC-M 60 Hz (0x00400100) instead of "unhandled" (zeros).
+- `src/kernel/kernel_hal.c` (`AvSendTVEncoderOption`, AV capabilities): the same permission bits. D3D accepts an HD
+  mode only when this word carries them – without them Amped 2's `CreateDevice` for 1280x720 failed and the game
+  launched its error program.
+- `src/kernel/kernel_bridge.c` (`kernel_data_init`): `HalBootSMCVideoMode` (ordinal 356) is 1 – the SMC's code for an
+  HDTV cable – with the permissions on (else 0 as before). XAPI's `XGetVideoFlags` keeps the HD flags only for that
+  cable, so a title reads the permissions through XAPI without game-side overrides.
+- Off by default, so titles stay in their SD mode. Amped 2 sets it when its native HD widescreen is on.
+  Generic: any title offering 480p/720p.
