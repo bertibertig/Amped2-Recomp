@@ -210,6 +210,7 @@ static struct {
     uint32_t          flips;
     uint32_t          scale;               /* resolution scale (settings) */
     double            widen;               /* aspect ratio / (4/3), >= 1 */
+    int               scissor_43;          /* scissor is the 4:3 middle (set_scissor) */
     uint32_t          shown_va[4];         /* surfaces the title has flipped */
     uint32_t          rt_flip;             /* last flip with draws off screen, +1 */
     VkPresentModeKHR  present_mode;
@@ -1386,6 +1387,29 @@ static void begin_rendering(VkbSurface *c, VkbDepth *d)
     sc.offset.x = 0; sc.offset.y = 0;
     sc.extent.width = c->width; sc.extent.height = c->height;
     vkCmdSetScissor(V.cmd, 0, 1, &sc);
+    V.scissor_43 = 0;
+}
+
+/* The scissor for the next draw: the whole surface, or (middle43) only the
+ * 4:3 middle of a widened one -- what a 4:3 screen showed. Set only when it
+ * changes; begin_rendering resets it to the whole surface. */
+static void set_scissor(const VkbSurface *s, int middle43)
+{
+    VkRect2D sc;
+
+    if (middle43 == V.scissor_43)
+        return;
+    sc.offset.x = 0;
+    sc.offset.y = 0;
+    sc.extent.width = s->width;
+    sc.extent.height = s->height;
+    if (middle43) {
+        uint32_t w43 = (uint32_t)((double)s->width / V.widen + 0.5);
+        sc.offset.x = (int32_t)(s->width - w43) / 2;
+        sc.extent.width = w43;
+    }
+    vkCmdSetScissor(V.cmd, 0, 1, &sc);
+    V.scissor_43 = middle43;
 }
 
 /* ---- textures ------------------------------------------------------------ */
@@ -2252,6 +2276,32 @@ static int covers_guest_screen(const Nv2aBatch *b, const VkbSurface *s)
     return covers;
 }
 
+/* A 2D overlay: depth test off and every vertex at the same depth -- the HUD
+ * and the GUI, drawn in 640x480 screen coordinates. The game parks hidden
+ * elements off screen (a camera counter at the bottom right past x 640,
+ * flown-out panels): invisible on a 4:3 screen, but inside the sides of a
+ * widened one. Such draws are clipped to the 4:3 middle (set_scissor); the
+ * world and its particles test depth and keep filling the sides.
+ * AMPED2_VK_HUD_CLIP=0 turns it off. */
+static int overlay_2d(const Nv2aBatch *b)
+{
+    static int on = -1;
+    float r0 = 1e9f, r1 = -1e9f;
+    uint32_t i;
+
+    if (on < 0) {
+        const char *e = getenv("AMPED2_VK_HUD_CLIP");
+        on = !(e && *e == '0');
+    }
+    if (!on || b->state->depth_test_enable || !b->count)
+        return 0;
+    for (i = 0; i < b->count; i++) {
+        if (b->vertices[i].rhw < r0) r0 = b->vertices[i].rhw;
+        if (b->vertices[i].rhw > r1) r1 = b->vertices[i].rhw;
+    }
+    return r1 - r0 <= 1e-5f * r1;
+}
+
 /* Whether the batch's colour target is a widened back buffer. */
 static int target_wide(const Nv2aSurface *g)
 {
@@ -2276,7 +2326,11 @@ static void vkb_draw(const Nv2aSurface *g, const Nv2aBatch *b)
 
     if (!b->count || !draw_prepare(g, b, &c))
         return;
-    fullscreen = covers_guest_screen(b, c.s) && c.s->wide && in_ride();
+    /* Solid fills only (no stage samples a texture): a fade or flash. A
+     * textured full-screen quad is an image -- the Photo Shoot card's badge is
+     * one, centred in a 640x480 quad -- and stretching it distorts it. */
+    fullscreen = covers_guest_screen(b, c.s) && c.s->wide && in_ride()
+              && !c.stex[0] && !c.stex[1] && !c.stex[2] && !c.stex[3];
     e = c.e;
     ebytes = e ? (VkDeviceSize)b->count * sizeof(Nv2aVertexExt) : sizeof(Nv2aVertexExt);
     if (!(dst = ring_alloc(&V.vring, bytes, 16, &voff[0]))
@@ -2311,6 +2365,7 @@ static void vkb_draw(const Nv2aSurface *g, const Nv2aBatch *b)
     draw_frag_state(b, &c);
     if (fullscreen)
         c.pc.x3d = 1.0f;                        /* full-screen fade: edge to edge */
+    set_scissor(c.s, !fullscreen && c.s->wide && in_ride() && overlay_2d(b));
     vkCmdPushDescriptorSetKHR(V.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, V.pipe_layout,
                               0, VKB_NBIND, c.w);
     vkCmdPushConstants(V.cmd, V.pipe_layout,
@@ -2342,9 +2397,10 @@ static int vkb_draw_program(const Nv2aSurface *g, const Nv2aBatch *b,
         return 0;
     /* A single quad into a widened back buffer takes the executor's CPU
      * transform instead (declined), so vkb_draw knows where it lands and can
-     * stretch a full-screen fade edge to edge (covers_guest_screen). A few
-     * tiny batches per frame. */
-    if (p->index_count <= 6 && in_ride() && target_wide(g))
+     * stretch a full-screen fade edge to edge (covers_guest_screen). So do
+     * 2D overlays (depth test off: the HUD), which vkb_draw clips to the 4:3
+     * middle (overlay_2d). A handful of batches per frame. */
+    if (in_ride() && (p->index_count <= 6 || !b->state->depth_test_enable) && target_wide(g))
         return 0;
     if (!draw_prepare(g, b, &c))
         return 1;                           /* nothing to draw into: dropped, as draw */
@@ -2432,6 +2488,7 @@ static int vkb_draw_program(const Nv2aSurface *g, const Nv2aBatch *b,
     bind_pipeline(V.pipeline_vsh);
     apply_state(b->state);
     draw_frag_state(b, &c);
+    set_scissor(c.s, 0);                    /* 3D: the whole widened surface */
     {
         static const uint32_t bindings[4] = { VKB_BIND_VCONST, VKB_BIND_VPROG,
                                               VKB_BIND_VATTR, VKB_BIND_VDATA };

@@ -626,3 +626,13 @@ _(date – what was done, what was found, next step)_
     (6 vertices, rhw 0.002, 640x480 or zoomed past it; `AMPED2_VK_FADELOG=1`). In rides such quads on a widened back
     buffer are declined by `vkb_draw_program` (CPU transform), then drawn unnarrowed with the edges pushed past the
     surface (no lit rim at a resolution scale). Menus keep the old path: they are presented as their 4:3 middle.
+- 2026-10-30 – **Widescreen: off-screen HUD hidden, fades only for solid fills.**
+  - A camera counter (`{0}`, bottom right) showed in rides; not in the original. The game parks hidden HUD/GUI elements
+    off screen (past x 640, flown-out panels): invisible at 4:3, inside the extra width of a widened back buffer.
+    2D overlays (depth test off, one constant depth) are clipped to the 4:3 middle in rides (`set_scissor`,
+    `AMPED2_VK_HUD_CLIP=0` turns it off); vertex-program overlays take the CPU transform for that. The world and its
+    particles test depth and still fill the sides. Also took most of the "glitching" in the side strips with it.
+  - The fade stretch is limited to untextured quads: the Photo Shoot card's badge is a textured full-screen quad and
+    was stretched to 21:9 (its ellipse at 4:3 is the original design, checked at 4:3).
+  - Not ours: trees vanish up close at the widescreen sides with the clip off too – the game culls with its 4:3 view.
+    Lead: the camera's aspect field (+0x184, 4:3 in 0x0015F825 / 0x001D8361 on NTSC-U).
