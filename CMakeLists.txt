@@ -25,9 +25,11 @@ add_compile_definitions(
 # (VS Code's cppvsdbg, .vscode/launch.json) and the crash handler's
 # SymFromAddr read. Our sources and the runtime get it, the generated code
 # not (see RECOMP_GEN_SOURCES): that keeps the PDB small and the build fast.
-# Release builds are unchanged.
+# RelWithDebInfo optimises like Release (-O3 instead of CMake's -O2), so it
+# plays the same and only adds the PDB. Release builds are unchanged.
 if(WIN32 AND NOT MSVC AND CMAKE_C_COMPILER_ID MATCHES "Clang")
     set(AMPED2_PDB ON)
+    string(REPLACE "-O2" "-O3" CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO}")
     foreach(cfg DEBUG RELWITHDEBINFO)
         string(APPEND CMAKE_C_FLAGS_${cfg} " -gcodeview")
         string(APPEND CMAKE_EXE_LINKER_FLAGS_${cfg} " -Wl,--pdb=")

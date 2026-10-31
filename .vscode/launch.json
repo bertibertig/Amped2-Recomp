@@ -21,15 +21,25 @@
       // Debug) so clang writes the PDB it reads (CMakeLists.txt, AMPED2_PDB). The game's access violations that the
       // runtime handles on purpose do not stop it; only unhandled ones do. Console output is not captured (a GUI
       // program): for logs start run.bat or the exe from Git Bash.
+      // Slower than a normal start: every access violation the runtime raises on purpose (the AC'97 audio
+      // registers, constantly) goes to the debugger first. For full speed start the game normally and use the
+      // attach entry below when needed. _NO_DEBUG_HEAP: no Windows debug heap for a process the debugger starts.
       "name": "Debug amped2_recomp (Windows, VS debugger)",
       "type": "cppvsdbg",
       "request": "launch",
       "program": "${command:cmake.launchTargetPath}",
       "args": [],
       "cwd": "${workspaceFolder}",
-      "environment": [],
+      "environment": [{ "name": "_NO_DEBUG_HEAP", "value": "1" }],
       "stopAtEntry": false,
       "preLaunchTask": "CMake: build"
+    },
+    {
+      // Windows: attach to a running amped2_recomp.exe (started normally, at full speed), e.g. when it hangs.
+      "name": "Attach to amped2_recomp (Windows, VS debugger)",
+      "type": "cppvsdbg",
+      "request": "attach",
+      "processId": "${command:pickProcess}"
     }
   ]
 }
