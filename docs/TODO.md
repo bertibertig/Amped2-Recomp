@@ -115,9 +115,10 @@ First batch (done 2026-10-20, `amped2_recomp --settings` / `scripts/run.sh --set
       re-validation hashing (`hash_guest_texture` 7 %, ~1 GB/s). Needed for 144-270 fps on the slope.
 - [ ] Ride/menu detection for the aspect ratio is a heuristic (draws into an off-screen target = ride, in_ride() in
       vk_backend.c); a game-state flag would be exact. Splash screen at boot counts as a ride for ~30 flips
-- [ ] Hor+: objects the game culls against its 4:3 frustum may pop in at the far sides (not seen in Millicent 1)
+- [x] Hor+ pop-in at the sides: gone with the native HD mode and the camera aspect hook (16:9 and wider); 16:10
+      shows the 720p picture with thin bars
 - [x] Widescreen: HUD elements the game parks off screen (a camera counter past x 640) stay hidden – 2D overlays are
-      clipped to the 4:3 middle in rides; full-screen fades cover the whole width
+      clipped to the 4:3 middle in rides (16:9 in the 720p mode); full-screen fades cover the whole width
 - [ ] Alt+Enter / F11 toggle not exercised by a test yet (needs window focus)
 
 Backlog (chosen 2026-10-20):
@@ -132,7 +133,10 @@ Backlog (chosen 2026-10-20):
   - [ ] LOD bias / model LOD / draw and fog distance (needs game-side research)
   - [ ] Texture filter override (force linear/trilinear, keep-original option)
 - Display and widescreen
-  - [ ] HUD/UI correction for wide aspect ratios (keep 4:3 proportions, edge-anchored or pillarboxed)
+  - [x] Native HD widescreen (2026-10-30): the game's own 720p mode (runtime patch 0004 grants the HD permissions)
+        with its 16:9 HUD layout; 21:9 through a camera aspect hook, culling for the full width (NTSC-U)
+  - [ ] The game's 720p menus are stretched (4:3 art, as on the Xbox): text and pictures at their own proportions
+  - [ ] HUD/UI correction for wider than 16:9 (edge-anchored elements instead of the 16:9 middle)
   - [ ] FOV slider (on top of the Hor+ aspect-ratio change)
   - [ ] VSync on/off/adaptive, frame limiter options, FPS / frame-time overlay
   - [ ] Output scaling modes: fit, stretch, integer; nearest vs linear for the final blit

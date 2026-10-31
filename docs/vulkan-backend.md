@@ -60,8 +60,9 @@ available as the reference (`AMPED2_RENDERER=cpu`) for comparison dumps; the Vul
 
 ## Amped 2
 - **Video overlay**: movies (XMV) are shown through the NV2A overlay, not drawn (see `docs/notes.md`). The runtime
-  latches the overlay (`nv2a_overlay.c`); the back end keeps a 640x480 BGRA overlay image, uploads it only when the
-  overlay has a new frame, and blits it over the surface at every present (`overlay_record`).
+  latches the overlay (`nv2a_overlay.c`); the back end keeps a BGRA overlay image of the shown screen's size
+  (640x480, 1280x720 in the 720p mode – the overlay's output rectangle is in those coordinates), uploads it only when
+  the overlay has a new frame, and blits it over the surface at every present (`overlay_record`).
 - **Presents without flips**: the back-end interface got an optional `idle` callback (runtime patch), called every
   round of the NV2A poll loop. `vkb_idle` presents when the overlay has a frame not yet shown – during a movie the game
   never flips. `present(0)` is the flip path without counting, logging or dumping.
@@ -87,5 +88,9 @@ available as the reference (`AMPED2_RENDERER=cpu`) for comparison dumps; the Vul
 - **Render-to-texture lookup** needs the surface's size and an uncompressed format, not only the address (surfaces
   outlive their use and memory is reused).
 - Diagnostics: `AMPED2_VK_TEXDUMP=<prefix>` writes decoded textures as BMP.
+- **Native HD widescreen**: in the game's 720p mode the back buffers are 1280x720. Widening is per surface, from its
+  own shape (`VkbSurface.widen`: 4:3 SD → 1.75 at 21:9, 16:9 HD → 1.3125). With the camera aspect hook active
+  (`g_amped2_camera_aspect`, src/recomp_manual.c) the game already renders the full width squeezed into 1280 pixels:
+  3D is drawn unnarrowed across the widened surface (`camera_wide`), 2D overlays narrowed to the 16:9 middle.
 - Not yet: colour-keyed overlays in the Vulkan path (the CPU window honours the key); validation layers are not
   installed on this machine (`vulkan-validation-layers`).

@@ -68,12 +68,14 @@ Linux (x86-64, glibc 2.39 or newer: Ubuntu 24.04+, Fedora 40+, Arch, SteamOS 3.6
     Arch:          sudo pacman -S sdl2 vulkan-icd-loader  (+ your GPU's Vulkan driver)
     Fedora:        sudo dnf install SDL2 vulkan-loader mesa-vulkan-drivers
 
-  The game opens a resizable window (internal resolution 640x480, 4:3).
+  The game opens a resizable window (internal resolution 640x480 at 4:3; with
+  a wider aspect ratio the game's own 1280x720 widescreen mode).
   Saves go to ~/.local/share/xboxrecomp.
 
   Graphics settings:  ./run.sh --settings
   opens a settings screen in the terminal before the game starts: internal
-  resolution (1x-5x), aspect ratio (4:3, 16:9, 16:10, 21:9), frame rate
+  resolution (1x-5x, multiples of 640x480 or of 1280x720), aspect ratio (4:3,
+  or 16:9 / 16:10 / 21:9 with the game's own 720p widescreen mode), frame rate
   (original 60 fps or unlocked up to your monitor's refresh rate) and window
   mode (windowed, fullscreen, borderless, which monitor). Arrow keys move and
   change, Enter saves and starts, Q quits. The choices are remembered in
@@ -146,6 +148,9 @@ in PowerShell:  $env:AMPED2_SKIP_INTRO = '1'; .\run.ps1
   multiplayer are not verified yet.
 - Rides in the original 60 fps mode run at about 55 fps instead of a steady 60.
 - The rider has no shadow yet.
+- Widescreen: the game's own 720p menus are drawn stretched, as on the Xbox.
+  The 720p mode is on by default for NTSC-U only; on PAL, AMPED2_HD=1 forces
+  it (untested).
 - Not tested on a Steam Deck yet.
 - Audio is mixed to stereo (no 5.1); the game's reverb and effects are mixed
   in dry.
