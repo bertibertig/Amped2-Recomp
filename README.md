@@ -30,6 +30,7 @@ Windows, both with the Vulkan renderer; macOS later.
 | 3D rider model in the menus and on the slope (matches the Xbox) | ✅ |
 | Riding (Millicent 1): HUD, challenge cards, goals board, ~55 fps on Vulkan | ✅ |
 | Graphics settings: resolution 1x-5x, 4:3 / 16:9 / 16:10 / 21:9, unlocked frame rate, window modes (TUI) | ✅ |
+| Native HD widescreen: the game's own 720p mode, extended to 21:9 with culling for the full width (NTSC-U) | ✅ |
 | Rider shadow, steady 60 fps | ⬜ |
 | Music without dropouts (DirectSound DPC race fixed), proper stereo downmix | ✅ |
 | Releases: [v0.1.0, v0.2.0](https://github.com/bertibertig/Amped2-Recomp/releases) (Linux x86-64, Windows preview) | ✅ |
@@ -157,10 +158,14 @@ Enter saves and starts, S saves, Q quits. The choices are saved in `~/.config/am
 
 | Category | Options |
 |---|---|
-| Resolution Scaling | Internal resolution 1x-5x (640x480 up to 3200x2400 at 4:3) |
-| Aspect Ratio | 4:3 (original), 16:9, 16:10, 21:9. Rides become wider (Hor+: more of the slope at the sides, the HUD stays 4:3 in the middle, and what the game parks off screen stays hidden there; full-screen fades cover the whole width); the menus and movies stay 4:3 |
+| Resolution Scaling | Internal resolution 1x-5x: multiples of 640x480 at 4:3, of 1280x720 in the 720p mode (2x is 2560x1440) |
+| Aspect Ratio | 4:3 (original, the Xbox's 640x480) or wider: 16:9, 16:10 and 21:9 use the game's own 720p widescreen mode – a wider view the game also culls for (no objects vanishing at the sides), its 16:9 HUD layout, sharper. 21:9 widens it further (the HUD stays 16:9 in the middle); 16:10 shows it with thin bars above and below. The game's own 720p menus are drawn stretched, as on the Xbox |
 | Framerate | Original (60 fps) or unlocked, with a limit: the monitor's refresh rate (vsync), 60-360 fps or none. The game runs on its own clock, so gameplay speed does not change |
 | Display | Windowed, fullscreen or borderless fullscreen, and the monitor to use. Alt+Enter or F11 switch in the game; the mode and monitor you leave it in are saved |
+
+The 720p mode is on by default for the NTSC-U disc. On PAL it is off: the camera code that extends it to 21:9 is
+not located there yet; `AMPED2_HD=1` forces the 720p mode anyway (untested on a PAL disc; 16:9 culling, 21:9
+widened from it), `AMPED2_HD=0` turns it off on NTSC-U.
 
 How high an unlocked frame rate gets depends on the CPU: on a ride it is about 90-120 fps for now (menus several
 hundred), the guest code and the NV2A thread are the limit, not the GPU. One run can override the file with
@@ -235,6 +240,7 @@ Start `claude` in the repo root: [CLAUDE.md](CLAUDE.md) explains the goal, layou
 - SSX3-Recomp (our SSX 3 port): https://github.com/bertibertig/SSX3-Recomp
 - SSX3-recomp by Koen Hendriks and Corné Dorrestijn: https://github.com/koenhendriks/SSX3-recomp (GPL-2.0-or-later, findings only)
 - SSX Tricky PC: https://github.com/MatiasRiveraC/SSX-Tricky-PC · OpenTricky: https://github.com/GiZcesi/OpenTricky (GPL-3.0-only)
+- RE-Amped2 (another Amped 2 recompilation): https://github.com/Nico-D-eu/RE-Amped2 (MIT, findings only)
 - [xemu](https://xemu.app) as the behaviour reference
 
 ## Legal
