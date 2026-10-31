@@ -279,8 +279,9 @@ void amped2_boot_movie(const char *which, const char *skip_env, void (*play)(voi
  * aspect becomes the setting's and the camera is marked dirty, so the game
  * builds and culls a 21:9 view itself -- squeezed into its 1280 pixels, which
  * the renderer stretches back across the widened surface (3D only; the HUD
- * keeps its 16:9 middle). Only a camera at exactly 16:9 is touched: the menu
- * cameras (4:3) and the square render-target cameras keep theirs.
+ * keeps its 16:9 middle). Only a camera at exactly 16:9 is touched -- the
+ * ride camera and the menu's rider preview, whose view the renderer stretches
+ * the same way; 4:3 cameras and the square render-target cameras keep theirs.
  * AMPED2_HD_CAMERA=0 turns it off. g_amped2_camera_aspect tells the renderer
  * that the 3D view is wide. */
 volatile float g_amped2_camera_aspect;

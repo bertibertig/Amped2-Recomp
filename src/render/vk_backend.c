@@ -2422,8 +2422,10 @@ static int vkb_draw_program(const Nv2aSurface *g, const Nv2aBatch *b,
     /* A single quad into a widened back buffer takes the executor's CPU
      * transform instead (declined), so vkb_draw knows where it lands and can
      * stretch a full-screen fade edge to edge (covers_guest_screen). So do
-     * 2D overlays (depth test off: the HUD), which vkb_draw clips to the 4:3
-     * middle (overlay_2d). A handful of batches per frame. */
+     * 2D overlays (depth test off: the HUD), which vkb_draw keeps in the
+     * game's own proportions (overlay_2d) and in rides clips to the middle it
+     * was laid out for (hud_clip: 4:3, or 16:9 in the 720p mode). A handful
+     * of batches per frame. */
     if (target_wide(g) && ((in_ride() && p->index_count <= 6) || !b->state->depth_test_enable))
         return 0;
     if (!draw_prepare(g, b, &c))

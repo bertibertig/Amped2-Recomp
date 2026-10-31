@@ -42,6 +42,14 @@ const char *amped2_aspect_name(int aspect)
                                                         : k_aspect_names[0];
 }
 
+int amped2_native_hd(const Amped2Settings *s, int supported)
+{
+    const char *v = getenv("AMPED2_HD");
+    if (v && *v)
+        return *v == '1';
+    return supported && s->aspect_ratio != AMPED2_ASPECT_4_3;
+}
+
 static void defaults(Amped2Settings *s)
 {
     s->resolution_scale = 1;

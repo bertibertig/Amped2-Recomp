@@ -22,7 +22,7 @@ static int fails;
 
 static const char *const k_env[] = {
     "AMPED2_RESOLUTION_SCALE", "AMPED2_ASPECT_RATIO", "AMPED2_FRAMERATE",
-    "AMPED2_FRAME_LIMIT", "AMPED2_WINDOW_MODE", "AMPED2_DISPLAY", "AMPED2_GAME_DIR" };
+    "AMPED2_FRAME_LIMIT", "AMPED2_WINDOW_MODE", "AMPED2_DISPLAY", "AMPED2_GAME_DIR", "AMPED2_HD" };
 
 /* An empty value counts as unset (settings.c skips it), so this also clears. */
 static void set_env(const char *name, const char *value)
@@ -215,6 +215,25 @@ static void test_aspect(void)
     CHECK(!strcmp(amped2_aspect_name(42), "4:3"));
 }
 
+static void test_native_hd(void)
+{
+    Amped2Settings s = g_amped2_settings;
+
+    s.aspect_ratio = AMPED2_ASPECT_4_3;
+    CHECK(!amped2_native_hd(&s, 1));
+    s.aspect_ratio = AMPED2_ASPECT_16_10;
+    CHECK(amped2_native_hd(&s, 1));
+    CHECK(!amped2_native_hd(&s, 0));            /* a build without it (PAL) */
+    set_env("AMPED2_HD", "1");
+    CHECK(amped2_native_hd(&s, 0));
+    s.aspect_ratio = AMPED2_ASPECT_4_3;
+    CHECK(amped2_native_hd(&s, 0));
+    set_env("AMPED2_HD", "0");
+    s.aspect_ratio = AMPED2_ASPECT_21_9;
+    CHECK(!amped2_native_hd(&s, 1));
+    set_env("AMPED2_HD", "");
+}
+
 int main(void)
 {
     set_env("AMPED2_SETTINGS", PATH);
@@ -229,6 +248,7 @@ int main(void)
     test_game_dir();
     test_round_trip();
     test_aspect();
+    test_native_hd();
 
     if (fails) {
         fprintf(stderr, "settings_test: %d check(s) failed\n", fails);

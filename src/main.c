@@ -872,16 +872,14 @@ static int load_settings(int want_tui)
      * camera that culls for it, a 16:9 HUD layout). On for every aspect ratio
      * wider than 4:3 where this build knows the camera (AMPED2_NATIVE_HD);
      * 16:10 shows it with thin bars above and below (sharper, culled right),
-     * 4:3 keeps the SD mode. AMPED2_HD=0 / 1 overrides. It needs the
+     * 4:3 keeps the SD mode. AMPED2_HD=0 / 1 overrides (amped2_native_hd,
+     * shared with the settings screen). It needs the
      * console's HD permissions from the runtime (RECOMP_VIDEO_HD: D3D checks
      * them before it creates a 1280x720 device, XAPI's XGetVideoFlags reports
      * them); the camera hook reads AMPED2_HD. Both are set either way, so an
      * inherited RECOMP_VIDEO_HD cannot leave the game in HD. */
     {
-        const char *hd = getenv("AMPED2_HD");
-        int on = hd && *hd ? *hd == '1'
-               : AMPED2_NATIVE_HD
-                 && g_amped2_settings.aspect_ratio != AMPED2_ASPECT_4_3;
+        int on = amped2_native_hd(&g_amped2_settings, AMPED2_NATIVE_HD);
         if (on)
             printf("[VIDEO] native HD: the game's 720p widescreen mode\n");
 #ifdef _WIN32

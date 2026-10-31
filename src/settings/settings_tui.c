@@ -270,10 +270,10 @@ static void s_scale(int i)         { S.resolution_scale = i + 1; }
 static void t_scale(int i, char *b, size_t n)
 {
     /* The game's own resolution: 640x480, or 1280x720 in its 720p mode
-     * (wider than 4:3, where this build supports it -- main.c), never
-     * narrower than 16:9 (16:10 shows it with bars). */
+     * (amped2_native_hd, as at start-up), never narrower than 16:9 (16:10
+     * shows it with bars). */
     double aspect = amped2_aspect_value(S.aspect_ratio);
-    int hd = AMPED2_NATIVE_HD && S.aspect_ratio != AMPED2_ASPECT_4_3;
+    int hd = amped2_native_hd(&S, AMPED2_NATIVE_HD);
     int h = (hd ? 720 : 480) * (i + 1);
     int w = (int)(h * (hd && aspect < 16.0 / 9.0 ? 16.0 / 9.0 : aspect) + 0.5);
     snprintf(b, n, "%dx  (%d x %d)%s", i + 1, w, h, i == 0 ? "  original" : "");

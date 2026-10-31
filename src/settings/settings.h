@@ -55,6 +55,12 @@ const char *amped2_settings_path(void);
 double amped2_aspect_value(int aspect);
 const char *amped2_aspect_name(int aspect);
 
+/* Whether the game runs in its native 720p widescreen mode: AMPED2_HD=0 / 1
+ * when set, else every aspect ratio wider than 4:3 in a build that supports it
+ * (supported: AMPED2_NATIVE_HD of the disc version). The one decision for
+ * start-up (main.c) and the settings screen's resolution labels. */
+int amped2_native_hd(const Amped2Settings *s, int supported);
+
 /* The interactive settings screen in the terminal. Returns 1 when the player
  * chose to start the game, 0 to quit. */
 int amped2_settings_tui(void);
