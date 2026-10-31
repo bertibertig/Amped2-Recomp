@@ -2,6 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
+      // Linux: the build from scripts/build.sh (or CMake Tools) in build/
       "name": "Debug amped2_recomp (gdb)",
       "type": "cppdbg",
       "request": "launch",
@@ -14,6 +15,21 @@
       "setupCommands": [
         { "description": "Pretty printing", "text": "-enable-pretty-printing", "ignoreFailures": true }
       ]
+    },
+    {
+      // Windows: the Visual Studio debugger of the C/C++ extension. Build with CMake Tools in RelWithDebInfo (or
+      // Debug) so clang writes the PDB it reads (CMakeLists.txt, AMPED2_PDB). The game's access violations that the
+      // runtime handles on purpose do not stop it; only unhandled ones do. Console output is not captured (a GUI
+      // program): for logs start run.bat or the exe from Git Bash.
+      "name": "Debug amped2_recomp (Windows, VS debugger)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${command:cmake.launchTargetPath}",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "environment": [],
+      "stopAtEntry": false,
+      "preLaunchTask": "CMake: build"
     }
   ]
 }

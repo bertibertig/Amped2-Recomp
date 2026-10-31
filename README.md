@@ -140,6 +140,12 @@ A checkout with `core.autocrlf=true` (the Git for Windows default) works: the ru
 matching line endings. The window icon is the game's dashboard image, read from your disc at run time (nothing of it
 in the repository; the exe file itself keeps the default icon).
 
+**VS Code** (the C/C++ and CMake Tools extensions): select a kit for your MinGW clang (*CMake: Select a Kit*; if it
+is not listed, add its `bin` folder to `cmake.additionalCompilerSearchDirs` in your user settings) and the build type
+*RelWithDebInfo*, build, then start *Debug amped2_recomp (Windows, VS debugger)*. With clang that build writes a PDB
+for our code and the runtime (not the generated code), which the Visual Studio debugger of the C/C++ extension
+reads. The bash tasks run in Git Bash.
+
 Without the build dependencies on the host: `scripts/docker.sh scripts/run_pipeline.sh` and
 `scripts/docker.sh scripts/build.sh` do the same in an Ubuntu 24.04 container (docker or podman), the binary goes to
 `build-docker/` and `scripts/run.sh` picks it up. Release packages: [docs/RELEASING.md](docs/RELEASING.md).

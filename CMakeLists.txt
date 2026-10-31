@@ -20,6 +20,20 @@ add_compile_definitions(
     NOMINMAX
 )
 
+# Windows debug builds with clang (llvm-mingw, Debug / RelWithDebInfo): debug
+# info as CodeView in a PDB next to the exe, which the Visual Studio debugger
+# (VS Code's cppvsdbg, .vscode/launch.json) and the crash handler's
+# SymFromAddr read. Our sources and the runtime get it, the generated code
+# not (see RECOMP_GEN_SOURCES): that keeps the PDB small and the build fast.
+# Release builds are unchanged.
+if(WIN32 AND NOT MSVC AND CMAKE_C_COMPILER_ID MATCHES "Clang")
+    set(AMPED2_PDB ON)
+    foreach(cfg DEBUG RELWITHDEBINFO)
+        string(APPEND CMAKE_C_FLAGS_${cfg} " -gcodeview")
+        string(APPEND CMAKE_EXE_LINKER_FLAGS_${cfg} " -Wl,--pdb=")
+    endforeach()
+endif()
+
 # ── xboxrecomp toolkit ──────────────────────────────────────────
 #
 # Option A: xboxrecomp as a subdirectory (simplest)
@@ -57,6 +71,12 @@ set_property(TARGET xbox_input PROPERTY SOURCES
 # time, so a newly generated file (an extra chunk, recomp_stubs_unresolved.c)
 # is silently left out of the build and shows up as unresolved externals.
 file(GLOB RECOMP_GEN_SOURCES CONFIGURE_DEPENDS "src/recomp/gen/*.c")
+if(AMPED2_PDB AND RECOMP_GEN_SOURCES)
+    # No debug info for the generated code (~75 MB of C): its functions still
+    # show by name (sub_XXXXXXXX) in the debugger's call stacks.
+    set_source_files_properties(${RECOMP_GEN_SOURCES} PROPERTIES
+        COMPILE_OPTIONS "$<$<CONFIG:Debug,RelWithDebInfo>:-g0>")
+endif()
 
 # Which Amped 2 build (pal / ntsc_u) the generated code comes from: written by
 # scripts/run_pipeline.sh next to it. Selects src/version/<build>/ (the

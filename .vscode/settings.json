@@ -10,6 +10,9 @@
   "cmake.buildDirectory": "${workspaceFolder}/build",
   "cmake.configureOnOpen": false,
   "cmake.exportCompileCommandsFile": true,
+  // IntelliSense from CMake Tools (the compiler and flags of the configured build, per platform); without a CMake
+  // Tools configure (Linux, scripts/build.sh) the compile commands in build/.
+  "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
   "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
   "C_Cpp.default.cStandard": "c11",
   "C_Cpp.intelliSenseEngine": "default",
@@ -20,6 +23,7 @@
     "**/reference/**": true,
     "**/game_files/**": true,
     "**/build/**": true,
+    "**/build-*/**": true,
     "**/.venv/**": true
   },
   "search.exclude": {
@@ -27,6 +31,7 @@
     "**/reference": true,
     "**/game_files": true,
     "**/build": true,
+    "**/build-*": true,
     "**/.venv": true
   },
   "files.exclude": {

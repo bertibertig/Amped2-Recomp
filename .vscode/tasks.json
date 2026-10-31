@@ -1,5 +1,11 @@
 {
   "version": "2.0.0",
+  // The scripts are bash: on Windows they run in Git Bash (Git for Windows' default install path).
+  "windows": {
+    "options": {
+      "shell": { "executable": "C:/Program Files/Git/bin/bash.exe", "args": ["-c"] }
+    }
+  },
   "tasks": [
     {
       "label": "Setup (venv + capstone)",
@@ -53,6 +59,11 @@
       "label": "Build (Release)",
       "type": "shell",
       "command": "scripts/build.sh",
+      // Windows builds go through CMake Tools, which knows the compiler (kit): its status bar Build, F7, or the
+      // task "CMake: build" below.
+      "windows": {
+        "command": "echo 'On Windows: build with CMake Tools (status bar Build / F7) or the task \"CMake: build\".' >&2; exit 1"
+      },
       "group": {
         "kind": "build",
         "isDefault": true
@@ -60,6 +71,13 @@
       "problemMatcher": [
         "$gcc"
       ]
+    },
+    {
+      // CMake Tools' build (configure first if needed): the build type and kit chosen in its status bar.
+      "label": "CMake: build",
+      "type": "cmake",
+      "command": "build",
+      "problemMatcher": []
     },
     {
       "label": "Fetch reference repos",

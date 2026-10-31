@@ -668,3 +668,10 @@ _(date – what was done, what was found, next step)_
   - Packaging: names carry the disc version (`<version>-<disc>-<os>`), SDL2's license is shipped, launcher and
     `game_files/README.txt` texts name PAL or NTSC-U; CI's Windows job installs glslc (MSYS2 shaderc).
   - Removed `AMPED2_VK_FADELOG` (the fade work is done); `flat_depth()` shared.
+- 2026-10-31 – **VS Code on Windows and Linux** (`.vscode/`, branch feat/vscode-multiplatform). The config was Linux
+  only: F5 started gdb on `build/amped2_recomp`, which on Windows left a dead debug session ("already running"), and
+  IntelliSense read `build/compile_commands.json`. Now: IntelliSense from CMake Tools (fallback as before), bash tasks
+  in Git Bash on Windows, a second launch entry with the Visual Studio debugger (`cppvsdbg`, already part of the C/C++
+  extension). It needs CodeView debug info: with clang on Windows, Debug/RelWithDebInfo builds add `-gcodeview` and
+  `-Wl,--pdb=` (CMakeLists.txt, `AMPED2_PDB`), the generated code gets `-g0` to keep the PDB small. The toolchain's
+  own lldb was no option: it fails to start without `libpython3.14.dll`.
