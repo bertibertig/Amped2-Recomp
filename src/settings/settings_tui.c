@@ -270,10 +270,12 @@ static void s_scale(int i)         { S.resolution_scale = i + 1; }
 static void t_scale(int i, char *b, size_t n)
 {
     /* The game's own resolution: 640x480, or 1280x720 in its 720p mode
-     * (16:9 and wider, where this build supports it -- main.c). */
+     * (wider than 4:3, where this build supports it -- main.c), never
+     * narrower than 16:9 (16:10 shows it with bars). */
     double aspect = amped2_aspect_value(S.aspect_ratio);
-    int base = AMPED2_NATIVE_HD && aspect >= 16.0 / 9.0 - 0.01 ? 720 : 480;
-    int h = base * (i + 1), w = (int)(h * aspect + 0.5);
+    int hd = AMPED2_NATIVE_HD && S.aspect_ratio != AMPED2_ASPECT_4_3;
+    int h = (hd ? 720 : 480) * (i + 1);
+    int w = (int)(h * (hd && aspect < 16.0 / 9.0 ? 16.0 / 9.0 : aspect) + 0.5);
     snprintf(b, n, "%dx  (%d x %d)%s", i + 1, w, h, i == 0 ? "  original" : "");
 }
 
@@ -347,18 +349,18 @@ static const Option k_res_opts[] = {
     { "Internal resolution",
       "The resolution the game is drawn at before it is scaled to the window. "
       "1x is the Xbox's 640x480 (1280x720 when the game runs its 720p widescreen "
-      "mode, at 16:9 and wider); every step multiplies both sides. Higher values "
+      "mode, wider than 4:3); every step multiplies both sides. Higher values "
       "sharpen edges and distant detail and cost GPU time (5x is 25 times the "
       "pixels of 1x per frame).",
       n_scale, t_scale, g_scale, s_scale, NULL },
 };
 static const Option k_aspect_opts[] = {
     { "Aspect ratio",
-      "16:9 and wider use the game's own 720p widescreen mode: a wider view, "
-      "culled for it, with the game's 16:9 HUD layout; 21:9 widens it further "
-      "(the HUD stays 16:9 in the middle). Menus are the game's own 720p "
-      "menus, drawn stretched as on the Xbox. 16:10 keeps the original 4:3 "
-      "game and shows more at the sides, where objects can pop in.",
+      "Wider than 4:3 uses the game's own 720p widescreen mode: a wider view, "
+      "culled for it, with the game's 16:9 HUD layout. 21:9 widens it further "
+      "(the HUD stays 16:9 in the middle); 16:10 shows it with thin bars above "
+      "and below. Menus are the game's own 720p menus, drawn stretched as on "
+      "the Xbox.",
       n_aspect, t_aspect, g_aspect, s_aspect, NULL },
 };
 static const Option k_fps_opts[] = {

@@ -648,7 +648,8 @@ _(date – what was done, what was found, next step)_
     (NTSC-M) – all with `RECOMP_VIDEO_HD=1` only. Then the game runs 1280x720 by itself (`SetDisplayMode` pitch 5120).
   - main.c: native HD for aspect ratios of 16:9 and wider where the build supports it (`AMPED2_NATIVE_HD`, NTSC-U 1,
     PAL 0 – the camera hook is not located for PAL); `AMPED2_HD=0/1` overrides; sets `AMPED2_HD` and `RECOMP_VIDEO_HD`
-    together. 4:3 and 16:10 keep the SD path.
+    together. 4:3 keeps the SD path; 16:10 gets the 720p mode with thin bars above and below (the user preferred
+    that to the SD path, which fills the screen but culls for 4:3).
   - 21:9: an entry hook on the camera update (0x0015F7B0, eax = camera; `sub_0015F7B0_enter`) replaces an aspect of
     exactly 16:9 with the setting's and marks the projection dirty (+0x170): the game builds and culls a 21:9 view in its
     1280 pixels. The back end widens per surface from its own shape (4:3 SD, 16:9 HD; 1.3125 for 21:9) and draws 3D
