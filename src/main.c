@@ -560,17 +560,6 @@ const void *amped2_xbe_data(size_t *size)
     return s_xbe_data;
 }
 
-/* Steps 1-2: load the XBE and map the guest address space.
- *
- * Separate from boot_and_run because it has to happen before anything else
- * claims host address space. The runtime places its windows at fixed host
- * addresses (guest offset + 0x80000000 for the contiguous window, the RAM
- * mirrors, the apertures) with MAP_FIXED_NOREPLACE. On POSIX with
- * RECOMP_FB_WINDOW, xbox_HostWindowMain initialises SDL and the OpenGL driver
- * first -- and Mesa mapped exactly where the contiguous window belongs:
- * "contiguous window at 0x80000000 ... failed (error 8)", then a fault in the
- * title's first physical allocation (sub_00184BEE). So the layout is mapped
- * here, on the main thread, before the window exists. */
 static int has_xbe(const char *dir)
 {
     char path[1100];
@@ -621,6 +610,17 @@ static int find_game_dir(void)
     return has_xbe(s_game_dir);
 }
 
+/* Steps 1-2: load the XBE and map the guest address space.
+ *
+ * Separate from boot_and_run because it has to happen before anything else
+ * claims host address space. The runtime places its windows at fixed host
+ * addresses (guest offset + 0x80000000 for the contiguous window, the RAM
+ * mirrors, the apertures) with MAP_FIXED_NOREPLACE. On POSIX with
+ * RECOMP_FB_WINDOW, xbox_HostWindowMain initialises SDL and the OpenGL driver
+ * first -- and Mesa mapped exactly where the contiguous window belongs:
+ * "contiguous window at 0x80000000 ... failed (error 8)", then a fault in the
+ * title's first physical allocation (sub_00184BEE). So the layout is mapped
+ * here, on the main thread, before the window exists. */
 static int boot_memory(void)
 {
     void *xbe_data = NULL;
