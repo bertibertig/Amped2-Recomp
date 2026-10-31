@@ -25,7 +25,15 @@ function Stop-WithPause([int]$code) {
   exit $code
 }
 
-if (-not (Test-Path -LiteralPath (Join-Path $gameFiles 'default.xbe'))) {
+# The game files: a configured folder (AMPED2_GAME_DIR, or game_dir in settings.ini) is checked by the program
+# itself; otherwise game_files\ here must hold default.xbe.
+$settingsIni = $env:AMPED2_SETTINGS
+if (-not $settingsIni) { $settingsIni = Join-Path $env:APPDATA 'amped2-recomp\settings.ini' }
+$gameDirSet = [bool]$env:AMPED2_GAME_DIR
+if (-not $gameDirSet -and (Test-Path -LiteralPath $settingsIni)) {
+  $gameDirSet = [bool](Select-String -LiteralPath $settingsIni -Pattern '^\s*game_dir\s*=\s*\S' -Quiet)
+}
+if (-not $gameDirSet -and -not (Test-Path -LiteralPath (Join-Path $gameFiles 'default.xbe'))) {
   Write-Host 'game_files\default.xbe missing: put the extracted contents of your Amped 2 Xbox disc (PAL or NTSC-U) into'
   Write-Host "$gameFiles\  - see README.txt, section 1."
   Stop-WithPause 1

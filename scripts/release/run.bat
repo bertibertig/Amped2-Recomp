@@ -4,7 +4,14 @@ rem The console output goes to run.log next to this file (attach it to bug repor
 rem Options: set them before starting, e.g.  set AMPED2_SKIP_INTRO=1  then  run.bat
 setlocal
 cd /d "%~dp0"
-if not exist "game_files\default.xbe" (
+rem The game files: a configured folder (AMPED2_GAME_DIR, or game_dir in settings.ini) is checked by the program
+rem itself; otherwise game_files\ here must hold default.xbe.
+set "SETTINGS_INI=%AMPED2_SETTINGS%"
+if not defined SETTINGS_INI set "SETTINGS_INI=%APPDATA%\amped2-recomp\settings.ini"
+set GAME_DIR_SET=
+if defined AMPED2_GAME_DIR set GAME_DIR_SET=1
+if exist "%SETTINGS_INI%" (findstr /r /c:"^ *game_dir *= *[^ ]" "%SETTINGS_INI%" >nul 2>&1 && set GAME_DIR_SET=1)
+if not defined GAME_DIR_SET if not exist "game_files\default.xbe" (
   echo game_files\default.xbe missing: put the extracted contents of your Amped 2 Xbox disc ^(PAL or NTSC-U^) into
   echo %~dp0game_files\  - see README.txt, section 1.
   pause

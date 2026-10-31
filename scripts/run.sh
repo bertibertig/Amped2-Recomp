@@ -42,7 +42,14 @@ else
   [ -x "$EXE" ] || [ ! -x "$ROOT/build-docker/amped2_recomp" ] || EXE="$ROOT/build-docker/amped2_recomp"   # scripts/docker.sh build
 fi
 [ -x "$EXE" ] || { echo "No build. First run: scripts/build.sh" >&2; exit 1; }
-[ -f "$ROOT/game_files/default.xbe" ] || {
+# The game files: a configured folder (AMPED2_GAME_DIR, or game_dir in the settings file) is checked by the program
+# itself (src/main.c, find_game_dir); otherwise game_files/ here must hold default.xbe.
+settings_game_dir() {
+  local f="${AMPED2_SETTINGS:-${XDG_CONFIG_HOME:-$HOME/.config}/amped2-recomp/settings.ini}"
+  [ -f "$f" ] || return 0
+  sed -n 's/^[[:space:]]*game_dir[[:space:]]*=[[:space:]]*//p' "$f" | tail -n 1 | tr -d '"\r'
+}
+[ -n "${AMPED2_GAME_DIR:-}" ] || [ -n "$(settings_game_dir)" ] || [ -f "$ROOT/game_files/default.xbe" ] || {
   echo "game_files/default.xbe missing: put the extracted contents of your Amped 2 Xbox disc (PAL or NTSC-U) into $ROOT/game_files/" >&2
   exit 1; }
 cd "$ROOT"
