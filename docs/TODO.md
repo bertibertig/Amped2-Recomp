@@ -82,6 +82,8 @@
       patch 0002); music turning loud/distorted – dispatch-lock timeout raised to 1000 ms on Windows
 - [x] Windows: exe started directly (defaults in WinMain, game files found next to the exe or via `game_dir`),
       window mode saved, window icon from the disc
+- [x] VS Code on Windows and Linux (2026-10-31): Visual Studio debugger with a PDB for our code and the runtime,
+      CMake Tools IntelliSense, bash tasks in Git Bash; toolchain via a local `CMakeUserPresets.json` (README)
 - [ ] Windows: controller unresponsive after clicking out of the window, once (not reproduced); one
       `z:\image.res` sharing violation that launched `Boom.xbe` (not reproduced)
 - [ ] CI's Windows job builds the Vulkan back end now: glslc from MSYS2's `mingw-w64-x86_64-shaderc`, SDL from the
