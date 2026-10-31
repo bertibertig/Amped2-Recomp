@@ -10,8 +10,8 @@ code replace the Xbox kernel, GPU, audio and input. No emulator.
 > This repo contains **no game code and no game data**. You need your own, legally obtained
 > Amped 2 Xbox disc. The C code is generated locally from your `default.xbe` and never committed.
 
-It follows the same route as SSX3-Recomp (our SSX 3 port with the same toolkit): Linux first
-(Steam Deck), Windows next, macOS later.
+It follows the same route as SSX3-Recomp (our SSX 3 port with the same toolkit): Linux (Steam Deck) and
+Windows, both with the Vulkan renderer; macOS later.
 
 ## Status
 
@@ -33,7 +33,7 @@ It follows the same route as SSX3-Recomp (our SSX 3 port with the same toolkit):
 | Rider shadow, steady 60 fps | ⬜ |
 | Music without dropouts (DirectSound DPC race fixed), proper stereo downmix | ✅ |
 | Releases: [v0.1.0, v0.2.0](https://github.com/bertibertig/Amped2-Recomp/releases) (Linux x86-64, Windows preview) | ✅ |
-| Windows build (MinGW): boots, menus and a ride under Wine/Proton, software renderer only (~2-6 fps) | 🟡 |
+| Windows (native build, MinGW / llvm-mingw): Vulkan renderer, saves, soundtrack; ~40-110 fps in rides (Windows 11, RTX 4070 SUPER) | ✅ |
 
 Plan and open items: [docs/TODO.md](docs/TODO.md), running log: [docs/notes.md](docs/notes.md).
 
@@ -49,9 +49,11 @@ Plan and open items: [docs/TODO.md](docs/TODO.md), running log: [docs/notes.md](
 Needs glibc 2.39 or newer (Ubuntu 24.04+, Fedora 40+, Arch, SteamOS 3.6+), SDL2 and a Vulkan driver
 (`sudo apt install libsdl2-2.0-0 libvulkan1 mesa-vulkan-drivers`).
 
-**Windows (10/11) is experimental and not playable yet**: software renderer only (about 4-6 fps in the menus, 2 fps
-on the slope), no graphics settings yet (`--settings` does not work there), so far only tested under Wine and Proton, where the
-movies stay black and the music may be missing.
+**Windows (10/11)** uses the Vulkan renderer as well and needs a Vulkan driver (any current NVIDIA, AMD or Intel
+driver). `amped2_recomp.exe` can also be started directly (double-click, a launcher): it applies the same defaults as
+`run.bat`. The terminal settings screen (`--settings`) does not show on Windows – edit
+`%APPDATA%\amped2-recomp\settings.ini` instead (see [Graphics settings](#graphics-settings)). Releases up to v0.2.0
+still had only the software renderer on Windows.
 
 ## Preparing the game files
 
@@ -79,7 +81,10 @@ version it needs. Other versions are not supported.
    or `xdvdfs unpack "Amped 2.iso" game_files`. Already have an extracted disc folder? Copy its contents instead.
 3. **Put it in the right place**: a folder named `game_files`
    - **release package**: next to `run.sh` / `run.bat` / `run.ps1` in the unpacked package folder;
-   - **build from source**: in the repository root (`scripts/extract_iso.sh <image.iso | folder>` does steps 2–3).
+   - **build from source**: in the repository root (`scripts/extract_iso.sh <image.iso | folder>` does steps 2–3);
+   - **anywhere else**: set `game_dir = <folder>` in the `[paths]` section of the settings file (or
+     `AMPED2_GAME_DIR`). The program looks there first, then for `game_files` next to itself, then in the folder it
+     was started from.
 4. **Check the layout**: `default.xbe` must sit directly in `game_files/`, not in a subfolder (no
    `game_files/Amped 2/default.xbe`). The whole disc is about 4 GB; keep every file and folder as extracted (the
    letter case of the names does not matter).
@@ -114,6 +119,26 @@ scripts/run_pipeline.sh                            # parse, disasm, func_id, abi
 scripts/doctor.sh                                  # bring-up report
 ```
 
+## Building on Windows
+
+Native, without WSL: [Git for Windows](https://git-scm.com/download/win) (its Git Bash runs the scripts), Python 3,
+CMake and Ninja, a MinGW-w64 compiler (MSYS2 `mingw-w64-x86_64-gcc`, or llvm-mingw) and the
+[Vulkan SDK](https://vulkan.lunarg.com/sdk/home#windows) for `glslc` (the core install is enough). SDL2 comes as the
+submodule `third_party/SDL` and is linked statically.
+
+```bash
+git clone --recurse-submodules <this-repo>; cd Amped2-Recomp
+python -m venv .venv && .venv/Scripts/python -m pip install capstone   # or scripts/setup.sh
+cp -r "/path/to/extracted disc/." game_files/                            # or scripts/extract_iso.sh
+scripts/run_pipeline.sh
+cmake -S . -B build-win -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build-win
+./build-win/amped2_recomp.exe > logs/run.log 2>&1                         # or double-click it
+```
+
+A checkout with `core.autocrlf=true` (the Git for Windows default) works: the runtime patches are applied with
+matching line endings. The window icon is the game's dashboard image, read from your disc at run time (nothing of it
+in the repository); `-DAMPED2_EMBED_DISC_ICON=ON` also puts it into the exe, for local builds only.
+
 Without the build dependencies on the host: `scripts/docker.sh scripts/run_pipeline.sh` and
 `scripts/docker.sh scripts/build.sh` do the same in an Ubuntu 24.04 container (docker or podman), the binary goes to
 `build-docker/` and `scripts/run.sh` picks it up. Release packages: [docs/RELEASING.md](docs/RELEASING.md).
@@ -135,13 +160,14 @@ Enter saves and starts, S saves, Q quits. The choices are saved in `~/.config/am
 | Resolution Scaling | Internal resolution 1x-5x (640x480 up to 3200x2400 at 4:3) |
 | Aspect Ratio | 4:3 (original), 16:9, 16:10, 21:9. Rides become wider (Hor+: more of the slope at the sides, the HUD stays 4:3 in the middle); the menus and movies stay 4:3 |
 | Framerate | Original (60 fps) or unlocked, with a limit: the monitor's refresh rate (vsync), 60-360 fps or none. The game runs on its own clock, so gameplay speed does not change |
-| Display | Windowed, fullscreen or borderless fullscreen, and the monitor to use. Alt+Enter or F11 switch in the game |
+| Display | Windowed, fullscreen or borderless fullscreen, and the monitor to use. Alt+Enter or F11 switch in the game; the mode and monitor you leave it in are saved |
 
 How high an unlocked frame rate gets depends on the CPU: on a ride it is about 90-120 fps for now (menus several
 hundred), the guest code and the NV2A thread are the limit, not the GPU. One run can override the file with
 environment variables, e.g. `AMPED2_RESOLUTION_SCALE=3 AMPED2_ASPECT_RATIO=21:9 scripts/run.sh`
 (`AMPED2_FRAMERATE`, `AMPED2_FRAME_LIMIT`, `AMPED2_WINDOW_MODE`, `AMPED2_DISPLAY`; `AMPED2_SETTINGS=<file>` uses
-another file). The Vulkan renderer only; the CPU renderer and the Windows build ignore resolution and aspect ratio.
+another file, `AMPED2_GAME_DIR` the game folder). The Vulkan renderer only; the CPU renderer ignores resolution and
+aspect ratio.
 
 ## Controls
 
@@ -220,4 +246,4 @@ Microsoft. The repository holds only original code, tooling and notes.
 
 This project's own code is licensed under the **GNU General Public License v3.0 or later** – see
 [LICENSE](LICENSE). The xboxrecomp submodule (MIT, LGPL-2.1 parts) and the other third-party code (volk: MIT,
-Vulkan-Headers: Apache-2.0/MIT) keep their own licenses.
+Vulkan-Headers: Apache-2.0/MIT, SDL2: zlib) keep their own licenses.
