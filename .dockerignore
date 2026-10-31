@@ -1,0 +1,4 @@
+# docker/Dockerfile only copies requirements.txt: keep game_files/, builds and generated code out of the build context
+*
+!requirements.txt
+!docker/
