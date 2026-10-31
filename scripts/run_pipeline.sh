@@ -8,13 +8,16 @@
 source "$(dirname "$0")/_common.sh"
 use_venv; need_xbe; apply_runtime_patches
 STEP="${1:-all}"
+# Seeds and hand-written overrides are per XBE build (pal / ntsc_u): config/<v>/, src/version/<v>/.
+VERSION="$(xbe_version)"
+echo "default.xbe: Amped 2 $VERSION"
 cd "$TOOLKIT"
 run() { echo; echo "=== $* ==="; "$@"; }
 
 [[ "$STEP" =~ ^(all|parse)$  ]] && run python -m tools.xbe_parser "$XBE" --json "${XBE%.xbe}_analysis.json"   # name is mandatory: <xbe-stem>_analysis.json
 # Seeds: functions the static analysis does not see (thread starts, ICALL targets from runtime logs,
 # generated with tools.seed_from_log). Passed automatically once the file exists.
-SEEDS="$ROOT/config/seed_functions.json"
+SEEDS="$ROOT/config/$VERSION/seed_functions.json"
 SEED_ARGS=(); [ -f "$SEEDS" ] && SEED_ARGS=(--seed-functions "$SEEDS")
 # The XDK libraries live in their own sections (SSX 3: D3D, D3DX, XGRPH, DSOUND, XPP; Amped 2 likely also
 # XONLINE/XNET for Xbox Live). With --text-only alone they are not swept linearly, only reached via calls –
@@ -45,7 +48,9 @@ fi
 [[ "$STEP" =~ ^(all|abi)$    ]] && run python -m tools.abi_analysis "$XBE" -v   # do NOT skip!
 if [[ "$STEP" =~ ^(all|recomp)$ ]]; then
   mkdir -p "$GEN_DIR"
-  # Functions defined by hand in src/recomp_manual.c are not generated (their definition there links instead).
-  run python -m tools.recomp "$XBE" --all --split 250 --gen-dir "$GEN_DIR" --exclude-manual "$ROOT/src/recomp_manual.c"
+  # Functions defined by hand in src/version/<v>/overrides.c are not generated (their definition there links
+  # instead). xbe_version.txt tells CMake which overrides.c belongs to this generated code.
+  run python -m tools.recomp "$XBE" --all --split 250 --gen-dir "$GEN_DIR" --exclude-manual "$ROOT/src/version/$VERSION/overrides.c"
+  echo "$VERSION" > "$GEN_DIR/xbe_version.txt"
 fi
 echo; echo "Done. Health report: scripts/doctor.sh"

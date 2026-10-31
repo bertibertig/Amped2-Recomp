@@ -26,6 +26,23 @@ need_xbe() {
   fi
 }
 
+# Which Amped 2 build game_files/default.xbe is. Statically recompiled code is tied to one XBE: every
+# hand-written address (src/version/<v>/, config/<v>/) belongs to one build. Known builds, by SHA-1:
+#   pal     38e63cd016bf084d999e0a911933a52191bfc378  (Europe, 2003-10-03)
+#   ntsc_u  5f432b86775b7b334212a3bc09d2063f670865b7  (North America, 2003-09-30; dumped with region/media
+#                                                      flags opened and the debug entry-point key)
+xbe_version() {
+  local sha
+  sha="$(sha1sum "$XBE" | cut -d' ' -f1)"
+  case "$sha" in
+    38e63cd016bf084d999e0a911933a52191bfc378) echo pal ;;
+    5f432b86775b7b334212a3bc09d2063f670865b7) echo ntsc_u ;;
+    *) echo "Unknown default.xbe (SHA-1 $sha): only the PAL and NTSC-U builds listed in scripts/_common.sh" \
+            "are supported. Their addresses live in src/version/ and config/." >&2
+       return 1 ;;
+  esac
+}
+
 # Our runtime changes live in patches/xboxrecomp/*.patch, not in the submodule (CLAUDE.md: the submodule stays
 # upstream). Apply them before anything uses xboxrecomp, so a fresh clone or a submodule update just builds.
 # Idempotent: an already applied patch is skipped. If the submodule has edits that match neither state (runtime

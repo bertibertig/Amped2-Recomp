@@ -559,3 +559,21 @@ _(date – what was done, what was found, next step)_
   - LB/White crash: not reproduced – a ride with White (next track) every 16 s ran to the timeout. The v0.2.0 release
     (dispatch-lock fix for the DPC race, which caused the earlier crash in `sub_001772F0`) was built 2026-10-21 02:51;
     a test "yesterday" may still have been an older build. Keep watching.
+- 2026-10-30 – **NTSC-U (North America) disc support.**
+  - A user's disc is a different build: `default.xbe` SHA-1 `5f432b86775b7b334212a3bc09d2063f670865b7`, build
+    2003-09-30, English only, entry 0x00254589 (debug key in this dump's header, region/media flags opened), kernel
+    thunk table 0x00336AE0. The release exe is generated from the PAL XBE, so it ran PAL code on NTSC-U data: wild
+    ICALLs (0x0073006C, 0x00040036) and "Game returned".
+  - Per-build layout: `scripts/_common.sh` `xbe_version` (SHA-1 → `pal` / `ntsc_u`), `config/<build>/seed_functions.json`,
+    `src/version/<build>/overrides.c` (the `sub_X` definitions, scanned by `--exclude-manual`) and `amped2_addrs.h`
+    (entry point, D3D device pointer, RunPushBuffer records). The bodies stay in `src/recomp_manual.c`, address-free.
+    `run_pipeline.sh recomp` writes `src/recomp/gen/xbe_version.txt`; CMake selects the build from it (PAL without gen).
+  - NTSC-U addresses (each checked in the disassembly): XDK sections, `.rdata`, `.data` sit 0x300 below PAL, the XAPI/CRT
+    end of `.text` 0x310 below, game code by varying amounts (boot movies −0x360). Media check 0x00254EF2, fence wait
+    0x0031E4E0 (kick-off 0x0031E2A0, return 0x0031E50D), device pointer 0x0032CBF8, RunPushBuffer records 0x0032A9C0 /
+    pending 0x0032A7AC, XNetGetTitleXnAddr 0x002BB36E, XMV fetch 0x002CDB60, boot movies MGS 0x00210CD0 / XSN
+    0x00210D80 / intro 0x00210C00. Seeds: 11 library ones translated from PAL, 5 vtable entries from a static `.rdata`
+    scan (PAL's sixth, 0x0024F240, has no static match), 3 code pointers stored after int3 padding (0x000EA3F0,
+    0x0019B5D0 – the ride crash: ICALL failed, then a read at 0xA4000000 –, 0x001C6F90). 14,376 functions, doctor clean.
+  - Played on Windows (feat/windows-vulkan): boot, menus, career profile, rides, saves and music.
+  - Open: a media-score element (`{0}` with a camera icon, bottom right) shows in rides but not in the original.

@@ -57,10 +57,29 @@ set_property(TARGET xbox_input PROPERTY SOURCES
 # is silently left out of the build and shows up as unresolved externals.
 file(GLOB RECOMP_GEN_SOURCES CONFIGURE_DEPENDS "src/recomp/gen/*.c")
 
+# Which Amped 2 build (pal / ntsc_u) the generated code comes from: written by
+# scripts/run_pipeline.sh next to it. Selects src/version/<build>/ (the
+# hand-written overrides and data addresses for that XBE). Without generated
+# code (host-only build, CI) PAL is compiled.
+set(AMPED2_XBE_VERSION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/src/recomp/gen/xbe_version.txt")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${AMPED2_XBE_VERSION_FILE})
+if(EXISTS ${AMPED2_XBE_VERSION_FILE})
+    file(STRINGS ${AMPED2_XBE_VERSION_FILE} AMPED2_XBE_VERSION LIMIT_COUNT 1)
+elseif(RECOMP_GEN_SOURCES)
+    message(FATAL_ERROR "src/recomp/gen has no xbe_version.txt: re-run scripts/run_pipeline.sh recomp")
+else()
+    set(AMPED2_XBE_VERSION pal)
+endif()
+if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/src/version/${AMPED2_XBE_VERSION}/overrides.c)
+    message(FATAL_ERROR "Unknown XBE build '${AMPED2_XBE_VERSION}' in ${AMPED2_XBE_VERSION_FILE}")
+endif()
+message(STATUS "Amped 2 XBE build: ${AMPED2_XBE_VERSION}")
+
 # Core game sources
 set(GAME_SOURCES
     src/main.c
     src/recomp_manual.c
+    src/version/${AMPED2_XBE_VERSION}/overrides.c
     src/settings/settings.c       # graphics settings file
     src/settings/settings_tui.c   # --settings: the settings screen in the terminal
     # Add game-specific sources here, e.g.:
@@ -104,6 +123,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE xboxrecomp)
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/recomp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/version/${AMPED2_XBE_VERSION}
     ${XBOXRECOMP_DIR}/include
 )
 

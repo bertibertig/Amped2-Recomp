@@ -1,0 +1,97 @@
+[
+ {
+  "start": "0x00254515",
+  "observed": true,
+  "note": "PsCreateSystemThreadEx StartContext1 (PAL 0x00254825, XAPI: PAL - 0x310); follows ret 8, calls the XAPI init 0x002550CC."
+ },
+ {
+  "start": "0x00259629",
+  "observed": true,
+  "note": "Indirect-call target (PAL 0x00259939, CRT: PAL - 0x310); SEH prologue push 0xC / push 0x337520."
+ },
+ {
+  "start": "0x0031C860",
+  "observed": true,
+  "note": "Indirect-call target (PAL 0x0031CB60, D3D section: PAL - 0x300); follows ret 4."
+ },
+ {
+  "start": "0x00263527",
+  "observed": true,
+  "note": "PsCreateSystemThreadEx StartContext1 (PAL 0x00263837: PAL - 0x310); push ebp / mov ebp, esp."
+ },
+ {
+  "start": "0x00311DE9",
+  "observed": true,
+  "note": "PsCreateSystemThreadEx StartContext1 (PAL 0x003120E9, XACTENG: PAL - 0x300); follows ret 8."
+ },
+ {
+  "start": "0x0032E0A4",
+  "observed": true,
+  "note": "Indirect-call target (PAL 0x0032E3A4, XPP: PAL - 0x300); push ebp / mov ebp, esp."
+ },
+ {
+  "start": "0x0032EAAB",
+  "observed": true,
+  "note": "Indirect-call target (PAL 0x0032EDAB, XPP: PAL - 0x300); follows ret 0xC."
+ },
+ {
+  "start": "0x003303DF",
+  "observed": true,
+  "note": "Indirect-call target (PAL 0x003306DF, XPP: PAL - 0x300); follows ret 8."
+ },
+ {
+  "start": "0x0032F98B",
+  "observed": true,
+  "note": "Indirect-call target (PAL 0x0032FC8B, XPP: PAL - 0x300); follows ret 8."
+ },
+ {
+  "start": "0x00282858",
+  "observed": true,
+  "note": "MSVC CRT x87 special-case tail (pop both, fldz) in the transcendental dispatch table at 0x3888C8 (PAL 0x00282B68 - 0x310)."
+ },
+ {
+  "start": "0x002828FA",
+  "observed": true,
+  "note": "MSVC CRT x87 special-case tail (pop both, load the default result from 0x373804) in the dispatch table at 0x3888C8 (PAL 0x00282C0A - 0x310)."
+ },
+ {
+  "start": "0x0006F6F0",
+  "observed": true,
+  "note": "Vtable entry at 0x0034AFB0 (static .rdata scan, follows ret/int3 padding; PAL counterpart 0x0006FA20); decodes as a function body."
+ },
+ {
+  "start": "0x00070900",
+  "observed": true,
+  "note": "Vtable entry at 0x0034B2E0 (static .rdata scan, follows ret/int3 padding; PAL counterpart 0x00070CA0); decodes as a function body."
+ },
+ {
+  "start": "0x000A5AE0",
+  "observed": true,
+  "note": "Vtable entry at 0x0034F430 (static .rdata scan, follows ret/int3 padding; PAL counterpart 0x000A5A70); decodes as a function body."
+ },
+ {
+  "start": "0x00196270",
+  "observed": true,
+  "note": "Vtable entry at 0x0036078C (static .rdata scan, follows ret/int3 padding; PAL counterpart 0x00196180); decodes as a function body."
+ },
+ {
+  "start": "0x001B5DE0",
+  "observed": true,
+  "note": "Vtable entry at 0x00363488 (static .rdata scan, follows ret/int3 padding; PAL counterpart 0x001B5D70); decodes as a function body."
+ },
+ {
+  "start": "0x000EA3F0",
+  "observed": true,
+  "note": "Callback stored by `mov dword ptr [ecx + 0x12C], 0xEA3F0` at 0x000EA302 (static scan for code pointers after int3 padding); decodes as a function body."
+ },
+ {
+  "start": "0x0019B5D0",
+  "observed": true,
+  "note": "Indirect-call target observed at runtime (unresolved ICALL, then a crash in a ride); stored by `mov ecx, 0x19B5D0` at 0x0019A05C. Thunk: mov eax, [esp+4]; jmp 0x19B5E0."
+ },
+ {
+  "start": "0x001C6F90",
+  "observed": true,
+  "note": "Callback loaded by `mov edx, 0x1C6F90` at 0x00288859 (static scan for code pointers after int3 padding); decodes as a function body."
+ }
+]

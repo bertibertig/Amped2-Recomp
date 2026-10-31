@@ -24,10 +24,12 @@
  *   - Customize the VEH handler for game-specific crash diagnosis
  *
  * XBE Details (xbe_parser, see docs/notes.md):
- *   Title:       Amped 2 (Xbox), PAL build 2003-10-03, XDK 5558 (D3D8LTCG)
+ *   Title:       Amped 2 (Xbox), PAL build 2003-10-03 or NTSC-U build
+ *                2003-09-30, XDK 5558 (D3D8LTCG)
  *   Title ID:    0x4D530041
  *   Base addr:   0x00010000
- *   Entry point: 0x00254899
+ *   Entry point: 0x00254899 (PAL) / 0x00254589 (NTSC-U), from
+ *                src/version/<build>/amped2_addrs.h
  *   Code size:   ~2550 KB (.text)
  *   Sections:    17 (.text, DSOUND, XONLINE, XNET, XMV, WMADEC, XACTENG,
  *                XGRPH, D3D, XPP, .rdata, .data, DOLBY, XON_RD, .data1,
@@ -71,6 +73,7 @@
 #include "render/vk_backend.h"
 #endif
 #include "settings/settings.h"
+#include "amped2_addrs.h"           /* src/version/<build>/: the XBE build this was generated from */
 
 
 /*
@@ -116,7 +119,7 @@ extern ptrdiff_t g_xbox_mem_offset;
  * Paths are relative to the working directory (repo root); forward slashes
  * work on both Windows and Linux.
  */
-#define YOUR_GAME_ENTRY_POINT   0x00254899  /* XBE entry point VA */
+#define YOUR_GAME_ENTRY_POINT   AMPED2_ENTRY_POINT  /* XBE entry point VA (per build) */
 #define YOUR_GAME_XBE_PATH      "game_files/default.xbe"
 #define YOUR_GAME_DIR            "game_files"
 
@@ -691,7 +694,7 @@ static int boot_and_run(void)
      */
 
     printf("\n=== Initialization complete ===\n");
-    printf("Entry point: 0x%08X\n", YOUR_GAME_ENTRY_POINT);
+    printf("XBE build: %s, entry point: 0x%08X\n", AMPED2_XBE_VERSION, YOUR_GAME_ENTRY_POINT);
     printf("ESP: 0x%08X\n", g_esp);
 
     /* Build the flat dispatch table before the guest runs.

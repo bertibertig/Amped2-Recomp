@@ -44,12 +44,20 @@
 
 /* ── Hand-written function bodies ──────────────────────────
  *
- * Every `void sub_XXXXXXXX(void)` *defined* in this file replaces the
- * generated body: run_pipeline.sh passes this file to the recompiler with
- * --exclude-manual, which skips generating those functions. So direct calls
- * reach these too, not only indirect ones (recomp_lookup_manual below).
- * After adding or removing one, re-run `scripts/run_pipeline.sh recomp`.
+ * The bodies live here, written once for every supported XBE build; the
+ * `void sub_XXXXXXXX(void)` definitions that route the game to them are in
+ * src/version/<build>/overrides.c, because each build has its own addresses
+ * (amped2_addrs.h next to it has the data addresses). run_pipeline.sh passes
+ * that file to the recompiler with --exclude-manual, which skips generating
+ * those functions. So direct calls reach them too, not only indirect ones
+ * (recomp_lookup_manual below). After adding or removing one there, re-run
+ * `scripts/run_pipeline.sh recomp`. Addresses in the comments below are PAL;
+ * src/version/ntsc_u/overrides.c lists the NTSC-U ones.
+ *
+ * Keep sub_XXXXXXXX names out of this file: the recompiler scans only
+ * overrides.c, so a name mentioned here is not guaranteed to link.
  */
+#include "amped2_addrs.h"
 
 /* XAPI media check (0x00255202, called once from 0x002553DC during process
  * start-up).
@@ -64,7 +72,7 @@
  *
  * Returning STATUS_SUCCESS is what a genuine disc yields. cdecl, no
  * arguments, plain `ret`. */
-void sub_00255202(void)
+void amped2_media_check(void)
 {
     g_eax = 0;      /* STATUS_SUCCESS */
     g_esp += 4;     /* ret */
@@ -86,16 +94,15 @@ void sub_00255202(void)
  * Now the executor writes the real semaphore (device + 0x30) at every
  * BACK_END_WRITE_SEMAPHORE_RELEASE, and this waits for it like the original's
  * spin at 0x0031E901, bounded at 250 ms. Like the original, the newest fence
- * first kicks off the pushbuffer holding its release (FUN_0031E5A0(0)); the
- * original's other branch waits for a GPU interrupt the runtime never raises,
- * which is why the whole function is replaced rather than wrapped.
- * Device pointer: 0x0032CEF8 (see src/main.c, docs/notes.md). */
+ * first kicks off the pushbuffer holding its release (FUN_0031E5A0(0), passed
+ * in as `kickoff`; `ret_va` is the original's return address after that
+ * call); the original's other branch waits for a GPU interrupt the runtime
+ * never raises, which is why the whole function is replaced rather than
+ * wrapped. Device pointer: AMPED2_D3D_DEVICE_PTR (0x0032CEF8 on PAL, see
+ * src/main.c, docs/notes.md). */
 extern void nv2a_pb_set_semaphore_target(uint32_t guest_va);
-extern void sub_0031E5A0(void);
 static double now_sec(void);
 static void host_yield(void);
-
-#define AMPED2_D3D_DEVICE_PTR 0x0032CEF8u
 
 static int fence_passed(uint32_t dev, uint32_t sem, uint32_t fence)
 {
@@ -104,7 +111,7 @@ static int fence_passed(uint32_t dev, uint32_t sem, uint32_t fence)
     return submitted - fence >= submitted - MEM32(sem);
 }
 
-void sub_0031E7E0(void)
+void amped2_fence_wait(void (*kickoff)(void), uint32_t ret_va)
 {
     static uint32_t targeted;
     uint32_t fence = g_eax;
@@ -125,8 +132,8 @@ void sub_0031E7E0(void)
     if (!fence_passed(dev, sem, fence)) {
         if (fence == MEM32(dev + 0x2C)) {
             PUSH32(g_esp, 0);               /* FUN_0031E5A0(0): kick off */
-            PUSH32(g_esp, 0x0031E80Du);
-            sub_0031E5A0();
+            PUSH32(g_esp, ret_va);
+            kickoff();
         }
         t0 = now_sec();
         while (!fence_passed(dev, sem, fence)) {
@@ -157,9 +164,10 @@ void sub_0031E7E0(void)
  * from different frames, and ring data executed as commands.
  *
  * Parameter: low 5 bits the kind, the rest a record. 0xD: slot (param >> 5)
- * of the device's record array at 0x0032ACC0 (20 bytes each); 0xC and 0xE:
- * the record's address in the ring, (param >> 5) | 0x80000000. 0xC and 0xD
- * also count down the pending patches at 0x0032AAAC. The handler's flush
+ * of the device's record array at AMPED2_PB_RECORDS (PAL 0x0032ACC0, 20 bytes
+ * each); 0xC and 0xE: the record's address in the ring, (param >> 5) |
+ * 0x80000000. 0xC and 0xD also count down the pending patches at
+ * AMPED2_PB_PENDING (PAL 0x0032AAAC). The handler's flush
  * (FUN_0031EC30) is left out: it waits for the executor itself to answer,
  * and nothing here caches the writes. The other kinds seen (0x08, 0x09)
  * write PGRAPH registers the executor does not model. */
@@ -191,11 +199,11 @@ void amped2_d3d_software_method(uint32_t param)
 {
     switch (param & 0x1F) {
     case 0x0D:
-        __atomic_sub_fetch((volatile uint32_t *)XBOX_PTR(0x0032AAACu), 1, __ATOMIC_SEQ_CST);
-        run_pushbuffer_patch(0x0032ACC0u + (param >> 5) * 20);
+        __atomic_sub_fetch((volatile uint32_t *)XBOX_PTR(AMPED2_PB_PENDING), 1, __ATOMIC_SEQ_CST);
+        run_pushbuffer_patch(AMPED2_PB_RECORDS + (param >> 5) * 20);
         break;
     case 0x0C:
-        __atomic_sub_fetch((volatile uint32_t *)XBOX_PTR(0x0032AAACu), 1, __ATOMIC_SEQ_CST);
+        __atomic_sub_fetch((volatile uint32_t *)XBOX_PTR(AMPED2_PB_PENDING), 1, __ATOMIC_SEQ_CST);
         /* fall through */
     case 0x0E:
         run_pushbuffer_patch((param >> 5) | 0x80000000u);
@@ -236,43 +244,27 @@ void amped2_d3d_software_method(uint32_t param)
  *   AMPED2_SKIP_LOGOS=1  no MGS / XSN logo movies (default in scripts/run.sh)
  *   AMPED2_SKIP_INTRO=1  no intro movie either
  *
- * The wrappers keep the generated bodies under the _gen name (the recompiler
- * emits sub_X_gen when this file defines sub_X and calls sub_X_gen). */
-extern void sub_00211030_gen(void);
-extern void sub_002110E0_gen(void);
-extern void sub_00210F60_gen(void);
-
+ * overrides.c keeps the generated bodies under the _gen name (the recompiler
+ * emits sub_X_gen when the manual file defines sub_X and calls sub_X_gen) and
+ * passes them in as `play`. */
 static int env_flag(const char *name)
 {
     const char *v = getenv(name);
     return v && *v == '1';
 }
 
-static void skip_movie(const char *which)
+void amped2_boot_movie(const char *which, const char *skip_env, void (*play)(void))
 {
     static int said;
+
+    if (!env_flag(skip_env)) {
+        play();
+        return;
+    }
     if (said++ < 3)
         fprintf(stderr, "[BOOT] skipping the %s movie\n", which);
     g_eax = 0;
     g_esp += 4;     /* ret */
-}
-
-void sub_00211030(void)             /* MGS logo */
-{
-    if (env_flag("AMPED2_SKIP_LOGOS")) { skip_movie("MGS logo"); return; }
-    sub_00211030_gen();
-}
-
-void sub_002110E0(void)             /* XSN Sports logo */
-{
-    if (env_flag("AMPED2_SKIP_LOGOS")) { skip_movie("XSN logo"); return; }
-    sub_002110E0_gen();
-}
-
-void sub_00210F60(void)             /* intro */
-{
-    if (env_flag("AMPED2_SKIP_INTRO")) { skip_movie("intro"); return; }
-    sub_00210F60_gen();
 }
 
 /* XMV frame fetch (XMV section 0x002CDE60, stdcall, 4 arguments; reached
@@ -280,8 +272,7 @@ void sub_00210F60(void)             /* intro */
  * iteration). AMPED2_XMV_STATS=1 prints every 5 s how often it was called,
  * how long the calls took and what they returned -- the question being
  * whether a movie lags because the loop asks too rarely or because the
- * decode itself is too slow. */
-extern void sub_002CDE60_gen(void);
+ * decode itself is too slow. The generated body comes in as `fetch`. */
 
 static void host_yield(void)
 {
@@ -312,7 +303,7 @@ static double now_sec(void)
 #endif
 }
 
-void sub_002CDE60(void)
+void amped2_xmv_fetch(void (*fetch)(void))
 {
     static int on = -1;
     static double t_start, t_busy, t_max;
@@ -321,14 +312,14 @@ void sub_002CDE60(void)
     if (on < 0)
         on = env_flag("AMPED2_XMV_STATS");
     if (!on) {
-        sub_002CDE60_gen();
+        fetch();
         return;
     }
     {
         double t0 = now_sec(), dt;
         if (!t_start)
             t_start = t0;
-        sub_002CDE60_gen();
+        fetch();
         dt = now_sec() - t0;
         t_busy += dt;
         if (dt > t_max)
@@ -347,7 +338,7 @@ void sub_002CDE60(void)
     }
 }
 
-void sub_002BB66E(void)
+void amped2_xnet_get_title_xnaddr(void)
 {
     uint32_t pxna = MEM32(g_esp + 4);
     uint32_t i;
