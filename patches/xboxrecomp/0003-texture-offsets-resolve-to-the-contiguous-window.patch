@@ -1,0 +1,48 @@
+diff --git a/src/kernel/nv2a_pb_exec.c b/src/kernel/nv2a_pb_exec.c
+index d2bb005..8c716e7 100644
+--- a/src/kernel/nv2a_pb_exec.c
++++ b/src/kernel/nv2a_pb_exec.c
+@@ -146,6 +146,25 @@ static uint32_t dma_resolve(uint32_t offset)
+     return offset;                         /* nothing better to offer */
+ }
+ 
++/* A texture's (or palette's) offset: the window whenever the arena handed
++ * that physical range out, whatever the RAM-name record says.
++ *
++ * XDK D3D allocates texture memory contiguously (XPhysicalAlloc), never from
++ * the general heap, so for a texture the window copy is the one meant. The
++ * RAM-name record cannot tell when both copies are live: Amped 2's face
++ * texture went to physical 0x01544900 after a ride while heap page 0x01544000,
++ * named through MmGetPhysicalAddress (sound data), was still allocated -- and
++ * the face sampled heap bytes as DXT, block noise. Vertex arrays keep
++ * dma_resolve: a title can place those in the heap. */
++static uint32_t dma_resolve_texture(uint32_t offset)
++{
++    extern uint32_t xbox_ContiguousAllocatedBytes(void);
++
++    if (offset < xbox_ContiguousAllocatedBytes())
++        return XBOX_CONTIG_BASE + offset;
++    return dma_resolve(offset);
++}
++
+ static int surface_write_refused(uint32_t base, uint32_t bytes, const char *what)
+ {
+     static int said;
+@@ -4023,7 +4042,7 @@ static void tex_stage_method(uint32_t method, uint32_t param)
+     case NV097_SET_TEXTURE_OFFSET:
+         /* A DMA-object offset like a surface's: physical, reached through
+          * the contiguous window when it names contiguous memory. */
+-        t->offset = dma_resolve(param);
++        t->offset = dma_resolve_texture(param);
+         break;
+     case NV097_SET_TEXTURE_FORMAT:
+         t->color = (param >> 8) & 0xFF;
+@@ -4039,7 +4058,7 @@ static void tex_stage_method(uint32_t method, uint32_t param)
+         break;
+     case NV097_SET_TEXTURE_PALETTE:
+         /* The low six bits carry the DMA context and the entry count. */
+-        t->palette = dma_resolve(param & ~0x3Fu);
++        t->palette = dma_resolve_texture(param & ~0x3Fu);
+         break;
+     case NV097_SET_TEXTURE_ADDRESS:
+         /* Four bits per axis. 1 is wrap, 3 clamp-to-edge; mirror and border

@@ -1436,6 +1436,51 @@ static int tex_is_cube(const Nv2aTexture *g)
     return g && g->cube_stride && g->width == g->height;
 }
 
+/* AMPED2_VK_TEXDUMP=<prefix>: every texture decode up to 512x512 (the first
+ * 4000) as <prefix><va>_<w>x<h>_<fmt>_<flip>[_re].bmp, _re when a cached
+ * texture's bytes changed -- to tell whether guest memory or the back end is
+ * wrong. */
+static void texdump(const Nv2aTexture *g, const uint32_t *argb, int redecode)
+{
+    static const char *prefix;
+    static int checked, n;
+    char path[512];
+    FILE *f;
+    uint32_t x, y, w = g->width, h = g->height, filesz;
+    uint8_t hdr[54];
+
+    if (!checked) {
+        prefix = getenv("AMPED2_VK_TEXDUMP");
+        checked = 1;
+    }
+    if (!prefix || w > 512 || h > 512 || n >= 4000)
+        return;
+    n++;
+    snprintf(path, sizeof path, "%s%08X_%ux%u_%02X_%06u%s.bmp", prefix, g->offset, w, h,
+             g->color, V.flips, redecode ? "_re" : "");
+    if (!(f = fopen(path, "wb")))
+        return;
+    filesz = 54 + w * h * 4;
+    memset(hdr, 0, sizeof hdr);
+    hdr[0] = 'B'; hdr[1] = 'M';
+    memcpy(hdr + 2, &filesz, 4);
+    hdr[10] = 54; hdr[14] = 40;
+    memcpy(hdr + 18, &w, 4);
+    memcpy(hdr + 22, &h, 4);
+    hdr[26] = 1; hdr[28] = 32;                     /* BGRA, bottom-up */
+    fwrite(hdr, 1, sizeof hdr, f);
+    for (y = h; y-- > 0;)
+        for (x = 0; x < w; x++)
+            fwrite(&argb[(size_t)y * w + x], 1, 4, f);
+    fclose(f);
+}
+
+/* DXT1 (0x0C), DXT3 (0x0E), DXT5 (0x0F): formats the GPU cannot render to. */
+static int tex_is_compressed(const Nv2aTexture *g)
+{
+    return g->color == 0x0C || g->color == 0x0E || g->color == 0x0F;
+}
+
 static uint64_t hash_guest_texture(const Nv2aTexture *g)
 {
     const uint8_t *mem = (const uint8_t *)xbox_GetMemoryOffset();
@@ -1578,10 +1623,18 @@ static VkImageView texture_view(const Nv2aTexture *g)
     int i;
 
     /* ponytail: a cube map the GPU rendered (dynamic reflections) is not
-     * looked up among the surfaces; it reads what guest memory holds. */
-    for (i = 0; i < VKB_MAX_SURFACES && !cube; i++) {
+     * looked up among the surfaces; it reads what guest memory holds.
+     *
+     * The address alone is not enough: surfaces are kept after the title is
+     * done with them, and their memory is reused. After a ride, Amped 2 put
+     * the boarder's face texture where a ride render target had been, and
+     * the face sampled that stale target (noise) instead of its pixels. A
+     * render-to-texture read has the target's size, and a compressed (DXT)
+     * texture is never one: the NV2A cannot render into those formats. */
+    for (i = 0; i < VKB_MAX_SURFACES && !cube && !tex_is_compressed(g); i++) {
         VkbSurface *s = &V.surfaces[i];
-        if (s->image && s->va == g->offset && s->layout != VK_IMAGE_LAYOUT_UNDEFINED) {
+        if (s->image && s->va == g->offset && s->layout != VK_IMAGE_LAYOUT_UNDEFINED
+                && s->gw == g->width && s->gh == g->height) {
             if (s == V.rt_color && V.rendering)
                 return NULL;               /* sampling the target being drawn */
             end_rendering();
@@ -1650,6 +1703,8 @@ static VkImageView texture_view(const Nv2aTexture *g)
     V.stat_decodes++;
     V.stat_decode_px += n;
     V.stat_new += !t;
+    if (!cube)
+        texdump(g, V.decode_buf, t != NULL);
     if (t && getenv("AMPED2_VK_TEXLOG")) {
         static int nlog;
         if (nlog++ < 60)
@@ -2148,6 +2203,66 @@ static void draw_frag_state(const Nv2aBatch *b, VkbDrawCtx *c)
                 | (rs->alpha_test_enable ? 0x80000000u : 0u);
 }
 
+/* A single flat quad that covers the whole guest screen: a fade, a flash, a
+ * full-screen tint. On a widened surface the HUD stays 4:3 in the middle,
+ * but these should reach the edges, or a fade to black leaves the sides lit.
+ * Amped 2 draws its fades with a vertex program: one quad (6 vertices) at a
+ * constant depth (rhw 0.002), exactly 640x480 or zoomed past the edges during
+ * the transition. Larger or deeper-varying geometry -- the world -- keeps its
+ * proportions. vkb_draw_program hands such quads to the CPU transform so
+ * their positions are known here. Rides only: a menu is presented as the 4:3
+ * middle of its surface, so a stretched menu background would show magnified
+ * -- and a menu fade needs nothing, the middle is all that is seen. */
+static int in_ride(void);
+
+static int covers_guest_screen(const Nv2aBatch *b, const VkbSurface *s)
+{
+    float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+    uint32_t i;
+    static int log = -1;
+    float r0 = 1e9f, r1 = -1e9f;
+    int covers;
+
+    if (log < 0)
+        log = getenv("AMPED2_VK_FADELOG") != NULL;
+    if (b->count > 6 && !log)
+        return 0;
+    for (i = 0; i < b->count; i++) {
+        const Nv2aVertex *v = &b->vertices[i];
+        if (v->rhw < r0) r0 = v->rhw;
+        if (v->rhw > r1) r1 = v->rhw;
+        if (v->x < x0) x0 = v->x;
+        if (v->x > x1) x1 = v->x;
+        if (v->y < y0) y0 = v->y;
+        if (v->y > y1) y1 = v->y;
+    }
+    covers = b->count <= 6 && r1 - r0 <= 1e-5f * r1
+          && x0 <= 2.0f && y0 <= 2.0f
+          && x1 >= (float)s->gw - 2.0f && y1 >= (float)s->gh - 2.0f;
+    /* AMPED2_VK_FADELOG=1: every batch spanning most of the screen. */
+    if (log && x1 - x0 >= 0.9f * (float)s->gw && y1 - y0 >= 0.9f * (float)s->gh) {
+        static int n;
+        if (n++ < 400)
+            fprintf(stderr, "  [FADE] flip %u surf %08X %ux%u%s: %u verts ext=%d rhw %.3f..%.3f "
+                    "x %.1f..%.1f y %.1f..%.1f diffuse0 %08X -> %s\n", V.flips, s->va, s->gw,
+                    s->gh, s->wide ? " wide" : "", b->count, b->ext != NULL, r0, r1, x0, x1,
+                    y0, y1, b->count ? b->vertices[0].diffuse : 0,
+                    covers && s->wide && in_ride() ? "stretched" : "kept");
+    }
+    return covers;
+}
+
+/* Whether the batch's colour target is a widened back buffer. */
+static int target_wide(const Nv2aSurface *g)
+{
+    int i;
+
+    for (i = 0; i < VKB_MAX_SURFACES; i++)
+        if (V.surfaces[i].image && V.surfaces[i].va == g->color_va)
+            return V.surfaces[i].wide;
+    return 0;
+}
+
 static void vkb_draw(const Nv2aSurface *g, const Nv2aBatch *b)
 {
     VkbDrawCtx c;
@@ -2157,9 +2272,11 @@ static void vkb_draw(const Nv2aSurface *g, const Nv2aBatch *b)
     VkBuffer vbufs[2];
     const Nv2aBatchExt *e;
     void *dst, *edst;
+    int fullscreen;
 
     if (!b->count || !draw_prepare(g, b, &c))
         return;
+    fullscreen = covers_guest_screen(b, c.s) && c.s->wide && in_ride();
     e = c.e;
     ebytes = e ? (VkDeviceSize)b->count * sizeof(Nv2aVertexExt) : sizeof(Nv2aVertexExt);
     if (!(dst = ring_alloc(&V.vring, bytes, 16, &voff[0]))
@@ -2170,6 +2287,19 @@ static void vkb_draw(const Nv2aSurface *g, const Nv2aBatch *b)
         return;
     }
     memcpy(dst, b->vertices, (size_t)bytes);
+    if (fullscreen) {
+        /* Its edges sit at guest sub-pixel positions (y 0.4 .. 479.6): enough
+         * at 640x480, but at a resolution scale the gaps are real pixels and
+         * a fade to black leaves a lit rim. Push the edges past the surface. */
+        Nv2aVertex *v = (Nv2aVertex *)dst;
+        uint32_t i;
+        for (i = 0; i < b->count; i++) {
+            if (v[i].x <= 2.0f) v[i].x = -2.0f;
+            if (v[i].x >= (float)c.s->gw - 2.0f) v[i].x = (float)c.s->gw + 2.0f;
+            if (v[i].y <= 2.0f) v[i].y = -2.0f;
+            if (v[i].y >= (float)c.s->gh - 2.0f) v[i].y = (float)c.s->gh + 2.0f;
+        }
+    }
     if (e)
         memcpy(edst, e->vertices, (size_t)ebytes);
     else
@@ -2179,6 +2309,8 @@ static void vkb_draw(const Nv2aSurface *g, const Nv2aBatch *b)
     bind_pipeline(V.pipeline);
     apply_state(b->state);
     draw_frag_state(b, &c);
+    if (fullscreen)
+        c.pc.x3d = 1.0f;                        /* full-screen fade: edge to edge */
     vkCmdPushDescriptorSetKHR(V.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, V.pipe_layout,
                               0, VKB_NBIND, c.w);
     vkCmdPushConstants(V.cmd, V.pipe_layout,
@@ -2207,6 +2339,12 @@ static int vkb_draw_program(const Nv2aSurface *g, const Nv2aBatch *b,
     void *m;
 
     if (!V.pipeline_vsh || !p->index_count || p->program_len > 136)
+        return 0;
+    /* A single quad into a widened back buffer takes the executor's CPU
+     * transform instead (declined), so vkb_draw knows where it lands and can
+     * stretch a full-screen fade edge to edge (covers_guest_screen). A few
+     * tiny batches per frame. */
+    if (p->index_count <= 6 && in_ride() && target_wide(g))
         return 0;
     if (!draw_prepare(g, b, &c))
         return 1;                           /* nothing to draw into: dropped, as draw */

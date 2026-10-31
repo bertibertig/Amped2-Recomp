@@ -141,3 +141,13 @@ Verified: Linux build + Windows cross build (MinGW) compile; own decoder test (8
   found nothing. Amped 2 lists a profile's folder with `FindFirstFile("U:\<profile>\*.*")` to sign its files into
   `career.sig`: on Windows every profile was saved with an empty signature list and refused at load ("Unable to load").
   Linux was not affected. Applies on top of 0001 (different file); generic, so SSX3-Recomp wants it too.
+
+## 0003 – Texture offsets resolve to the contiguous window
+- `src/kernel/nv2a_pb_exec.c`: new `dma_resolve_texture` for `SET_TEXTURE_OFFSET` and `SET_TEXTURE_PALETTE`: an
+  offset below the contiguous arena's high-water mark is always the window copy (`XBOX_CONTIG_BASE + offset`), even
+  when the RAM-name record (`xbox_PhysNoteRamName`, set by `MmGetPhysicalAddress` on a heap page) claims the same
+  number. XDK D3D allocates textures contiguously, never from the heap, while that record exists for DirectSound
+  buffers in the heap and stays set while the heap page is live – it cannot tell which copy is meant when both are.
+  Amped 2 (NTSC-U, Windows): after a ride the boarder's face texture went to physical 0x01544900 while heap page
+  0x01544000 was still named for sound data; the face sampled heap bytes as DXT and showed block noise. Vertex arrays
+  keep `dma_resolve` (a title can put those in the heap). Applies on top of 0001 (same file).

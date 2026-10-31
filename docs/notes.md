@@ -616,3 +616,13 @@ _(date – what was done, what was found, next step)_
     exe file keeps the default icon (embedding the disc's image there was tried as a local-only option and dropped:
     a release must not carry it, and the window icon covers the running game).
   - settings_test covers `game_dir` (spaces, quotes, environment override).
+- 2026-10-30 – **Boarder's face after a ride, widescreen fades.**
+  - The face showed block noise after a ride (Change Gear): its texture moved to physical 0x01544900 while heap page
+    0x01544000 was named for sound data (`xbox_PhysNoteRamName`), and `dma_resolve` chose the heap. Runtime patch 0003:
+    texture and palette offsets inside the contiguous arena always resolve to the window (XDK D3D never puts textures
+    in the heap). Found with the new `AMPED2_VK_TEXDUMP=<prefix>` (decoded textures as BMP). Render-to-texture lookups
+    also need the surface's size and an uncompressed format now (a stale surface at a reused address).
+  - Widescreen: a ride's fade (Select to restart) only darkened the 4:3 middle. It is one vertex-program quad
+    (6 vertices, rhw 0.002, 640x480 or zoomed past it; `AMPED2_VK_FADELOG=1`). In rides such quads on a widened back
+    buffer are declined by `vkb_draw_program` (CPU transform), then drawn unnarrowed with the edges pushed past the
+    surface (no lit rim at a resolution scale). Menus keep the old path: they are presented as their 4:3 middle.
