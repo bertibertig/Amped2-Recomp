@@ -4,8 +4,8 @@
     python scripts/xbe_icon.py game_files/default.xbe src/recomp/gen/amped2.ico
 
 Run by run_pipeline.sh (recomp step): the icon comes from the player's own disc and lands next to the generated code,
-which is never committed; CMake embeds it into the Windows exe when it exists. Same decoding as src/title_image.c
-(which sets the window icon at run time). Standard library only: PNG entries at 128, 64, 48, 32 and 16 pixels.
+which is never committed; CMake embeds it into the Windows exe only with -DAMPED2_EMBED_DISC_ICON=ON (local builds,
+never a release). Same decoding as src/title_image.c (which sets the window icon at run time). Standard library only: PNG entries at 128, 64, 48, 32 and 16 pixels.
 """
 import struct
 import sys
