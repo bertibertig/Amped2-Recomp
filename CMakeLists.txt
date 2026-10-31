@@ -161,12 +161,18 @@ endif()
 # ── Vulkan render back end (src/render, docs/vulkan-backend.md) ──
 #
 # Vulkan-Headers and volk are pinned submodules under third_party/, so no
-# Vulkan SDK is needed: volk loads libvulkan / vulkan-1.dll at run time.
-# POSIX only for now -- the window comes from SDL2, which the Windows
-# runtime does not use (a Win32 surface is milestone 4). Selected at run
-# time with AMPED2_RENDERER=vulkan.
+# Vulkan SDK is needed: volk loads libvulkan / vulkan-1.dll at run time. Only
+# glslc is needed at build time (Linux: the glslc package; Windows: the
+# Vulkan SDK, found through VULKAN_SDK). The window comes from SDL2: the
+# system's on POSIX, on Windows the pinned submodule third_party/SDL built
+# statically into the exe (no SDL2.dll to ship). Selected at run time with
+# AMPED2_RENDERER=vulkan (the default on Windows, see apply_windows_defaults).
 option(AMPED2_VULKAN "Build the Vulkan render back end" ON)
-if(AMPED2_VULKAN AND NOT WIN32)
+if(AMPED2_VULKAN AND WIN32 AND NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/SDL/CMakeLists.txt)
+    message(FATAL_ERROR "SDL2 submodule missing: git submodule update --init third_party/SDL "
+                        "(or configure with -DAMPED2_VULKAN=OFF for the software renderer only)")
+endif()
+if(AMPED2_VULKAN)
     set(AMPED2_VK_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/Vulkan-Headers/include)
     set(AMPED2_VOLK_DIR   ${CMAKE_CURRENT_SOURCE_DIR}/third_party/volk)
     if(NOT EXISTS ${AMPED2_VK_HEADERS}/vulkan/vulkan_core.h OR NOT EXISTS ${AMPED2_VOLK_DIR}/volk.c)
@@ -179,7 +185,7 @@ if(AMPED2_VULKAN AND NOT WIN32)
     target_link_libraries(amped2_volk PRIVATE ${CMAKE_DL_LIBS})
 
     # Shaders: GLSL -> SPIR-V as C initialiser lists, included by vk_backend.c.
-    find_program(AMPED2_GLSLC glslc REQUIRED)
+    find_program(AMPED2_GLSLC glslc HINTS "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/bin" REQUIRED)
     set(AMPED2_SHADER_OUT ${CMAKE_CURRENT_BINARY_DIR}/shaders)
     set(AMPED2_SHADER_INCS)
     foreach(sh nv2a.vert nv2a.frag nv2a_vsh.vert)
@@ -196,13 +202,31 @@ if(AMPED2_VULKAN AND NOT WIN32)
     add_custom_target(amped2_shaders DEPENDS ${AMPED2_SHADER_INCS})
     add_dependencies(${PROJECT_NAME} amped2_shaders)
 
-    find_package(SDL2 REQUIRED)
+    if(WIN32)
+        set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+        set(SDL_STATIC ON CACHE BOOL "" FORCE)
+        set(SDL_TEST OFF CACHE BOOL "" FORCE)
+        set(SDL2_DISABLE_SDL2MAIN ON CACHE BOOL "" FORCE)
+        set(SDL2_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
+        add_subdirectory(third_party/SDL ${CMAKE_BINARY_DIR}/SDL EXCLUDE_FROM_ALL)
+        set(AMPED2_SDL2 SDL2::SDL2-static)
+        # The runtime builds its SDL keyboard glue (SDL key events into the
+        # pad's key table) on POSIX only; the Vulkan window needs it here too.
+        target_sources(${PROJECT_NAME} PRIVATE ${XBOXRECOMP_DIR}/src/input/keyboard_sdl.c)
+        # Our game keys (Space/Escape/Tab, src/input/amped2_keys.c, built into
+        # xbox_input) read SDL's keyboard state as well as the Win32 one.
+        target_compile_definitions(xbox_input PRIVATE AMPED2_SDL_KEYS=1)
+        target_link_libraries(xbox_input PRIVATE SDL2::SDL2-static)
+    else()
+        find_package(SDL2 REQUIRED)
+        set(AMPED2_SDL2 SDL2::SDL2)
+    endif()
     target_sources(${PROJECT_NAME} PRIVATE src/render/vk_backend.c)
     target_include_directories(${PROJECT_NAME} PRIVATE ${AMPED2_SHADER_OUT})
     target_include_directories(${PROJECT_NAME} PRIVATE
         ${XBOXRECOMP_DIR}/src/kernel     # nv2a_backend.h
         ${XBOXRECOMP_DIR}/src/input)     # keyboard_sdl.h
-    target_link_libraries(${PROJECT_NAME} PRIVATE amped2_volk SDL2::SDL2)
+    target_link_libraries(${PROJECT_NAME} PRIVATE amped2_volk ${AMPED2_SDL2})
     target_compile_definitions(${PROJECT_NAME} PRIVATE AMPED2_HAVE_VULKAN=1)
 endif()
 

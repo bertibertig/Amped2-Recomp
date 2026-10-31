@@ -10,7 +10,8 @@
 #   RECOMP_WIN_PLACEHOLDER=1  reserve the whole 4 GB guest window up front: without it Wine/Proton cannot map the
 #                             GPU's tiled memory window (0xF0000000) and the game crashes at the first movie frame
 #   RECOMP_TITLE_KEVENTS=1 RECOMP_VBLANK=1 RECOMP_AC97_READY=1 RECOMP_HEAP_RECLAIM=1 RECOMP_FLIP_VSYNC=1
-#   RECOMP_PB_EXEC=1 RECOMP_FB_WINDOW=1 RECOMP_USB=1 RECOMP_KEYBOARD=1 AMPED2_SKIP_LOGOS=1
+#   RECOMP_PB_EXEC=1 RECOMP_USB=1 RECOMP_KEYBOARD=1 AMPED2_SKIP_LOGOS=1 AMPED2_RENDERER=vulkan
+#   (AMPED2_RENDERER=cpu: the slow software renderer, with RECOMP_FB_WINDOW=1 for its window)
 #   (what they do: run.sh in the source repository, docs/notes.md)
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -42,10 +43,10 @@ $defaults = [ordered]@{
   RECOMP_HEAP_RECLAIM    = '1'
   RECOMP_FLIP_VSYNC      = '1'
   RECOMP_PB_EXEC         = '1'
-  RECOMP_FB_WINDOW       = '1'
   RECOMP_USB             = '1'
   RECOMP_KEYBOARD        = '1'
   AMPED2_SKIP_LOGOS      = '1'
+  AMPED2_RENDERER        = 'vulkan'
 }
 foreach ($name in $defaults.Keys) {
   if (-not [Environment]::GetEnvironmentVariable($name)) {

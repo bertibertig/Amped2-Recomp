@@ -13,6 +13,9 @@ use_venv() {
   if [ -f "$VENV/bin/activate" ]; then
     # shellcheck disable=SC1091
     . "$VENV/bin/activate"
+  elif [ -f "$VENV/Scripts/activate" ]; then   # Windows venv (Git Bash / MSYS2)
+    # shellcheck disable=SC1091
+    . "$VENV/Scripts/activate"
   else
     echo "No .venv found – run first: scripts/setup.sh" >&2
     exit 1

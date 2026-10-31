@@ -198,12 +198,20 @@ static void print_guest_context(void *rip)
     SYMBOL_INFO *sym = (SYMBOL_INFO *)buf;
     DWORD64 disp = 0;
 
+    HMODULE exe = GetModuleHandleW(NULL);
+
     memset(buf, 0, sizeof(buf));
     sym->SizeOfStruct = sizeof(SYMBOL_INFO);
     sym->MaxNameLen = 255;
     if (SymFromAddr(GetCurrentProcess(), (DWORD64)(uintptr_t)rip, &disp, sym))
         fprintf(stderr, "  in %s+0x%llX\n",
                 sym->Name, (unsigned long long)disp);
+    /* A MinGW build has no PDB, so SymFromAddr usually finds nothing. The
+     * offset into the exe survives ASLR: map it with
+     *   nm -n amped2_recomp.exe   (symbol addresses are image base + offset) */
+    if (rip && exe && (uintptr_t)rip >= (uintptr_t)exe)
+        fprintf(stderr, "  at amped2_recomp.exe+0x%llX (image base %p)\n",
+                (unsigned long long)((uintptr_t)rip - (uintptr_t)exe), (void *)exe);
 #else
     Dl_info info;
     if (rip && dladdr(rip, &info) && info.dli_sname)
@@ -793,6 +801,53 @@ static int load_settings(int want_tui)
 }
 
 #ifdef _WIN32
+/* The defaults run.bat / run.ps1 set, applied here too so that starting
+ * amped2_recomp.exe directly (double-click, a launcher) behaves the same.
+ * Only fills in what is not set already. With the Vulkan back end built in,
+ * it is the default renderer (AMPED2_RENDERER=cpu: the software rasteriser in
+ * its own framebuffer window, RECOMP_FB_WINDOW). */
+static void apply_windows_defaults(void)
+{
+    static const char *const defaults[][2] = {
+        /* Reserve the whole 4 GB guest window up front: without it Wine/Proton
+         * cannot map the GPU's tiled window (0xF0000000). */
+        { "RECOMP_WIN_PLACEHOLDER", "1" },
+        { "RECOMP_TITLE_KEVENTS",   "1" },
+        { "RECOMP_VBLANK",          "1" },
+        { "RECOMP_AC97_READY",      "1" },
+        { "RECOMP_HEAP_RECLAIM",    "1" },
+        { "RECOMP_FLIP_VSYNC",      "1" },
+        { "RECOMP_PB_EXEC",         "1" },
+        { "RECOMP_USB",             "1" },
+        { "RECOMP_KEYBOARD",        "1" },
+        { "AMPED2_SKIP_LOGOS",      "1" },
+        /* How long DirectSound's DPC waits for a thread at raised IRQL before
+         * running anyway (runtime default 100 ms). Windows preempts such a
+         * thread mid-sequence under load (unlocked frame rate), the DPC then
+         * ran inside a game thread's voice update and the music turned loud
+         * and distorted for good; waiting longer costs at most a hitch. */
+        { "RECOMP_DISPATCH_LOCK_MS", "1000" },
+#if defined(AMPED2_HAVE_VULKAN)
+        { "AMPED2_RENDERER",        "vulkan" },
+#endif
+    };
+    char buf[96];
+    const char *renderer;
+    size_t i;
+
+    for (i = 0; i < sizeof defaults / sizeof defaults[0]; i++) {
+        if (getenv(defaults[i][0]))
+            continue;
+        snprintf(buf, sizeof buf, "%s=%s", defaults[i][0], defaults[i][1]);
+        _putenv(buf);
+    }
+    renderer = getenv("AMPED2_RENDERER");
+    if (renderer && strcmp(renderer, "vulkan") == 0)
+        _putenv("RECOMP_FB_WINDOW=");     /* the Vulkan back end opens its own window */
+    else if (!getenv("RECOMP_FB_WINDOW"))
+        _putenv("RECOMP_FB_WINDOW=1");    /* the CPU rasteriser's window */
+}
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                    LPSTR lpCmdLine, int nCmdShow)
 {
@@ -808,6 +863,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     printf("=== Amped 2 (Xbox) - Static Recompilation ===\n");
     if (load_settings(lpCmdLine && strstr(lpCmdLine, "--settings") != NULL))
         return 0;
+    apply_windows_defaults();
 
     /* Install VEH handler (first handler in chain) */
     /* Load symbols up front rather than from inside the handler: at fault
@@ -819,6 +875,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
     if (boot_memory() != 0)
         return 1;
+#if defined(AMPED2_HAVE_VULKAN)
+    {
+        /* As on POSIX: the Vulkan renderer's window on the main thread, the
+         * guest on its own. */
+        const char *renderer = getenv("AMPED2_RENDERER");
+        if (renderer && strcmp(renderer, "vulkan") == 0)
+            return amped2_vk_host_main(boot_and_run);
+    }
+#endif
     return boot_and_run();
 }
 #endif

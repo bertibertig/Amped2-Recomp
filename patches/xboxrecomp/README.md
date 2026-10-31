@@ -133,3 +133,11 @@ All of them are candidates for an upstream PR to sp00nznet/xboxrecomp.
 Verified: Linux build + Windows cross build (MinGW) compile; own decoder test (8 cases, ucontext) green;
 `tools.recomp.test_reserved_idents` green; SSX 3 on Linux reaches the same state as under Proton
 (APU/AC'97/DSP doorbell/APU interrupts, intro videos are opened).
+
+## 0002 – Windows: directory query with a zero-length pattern
+- `src/kernel/kernel_file.c` (Win32 `xbox_NtQueryDirectoryFile`): a `FileName` with `Length == 0` now enumerates every
+  entry (`*`), as the POSIX implementation and the Xbox kernel do. XAPI's `FindFirstFile` passes the pattern `*.*` that
+  way (buffer kept, length set to 0); `MultiByteToWideChar` fails on a zero length, so the search became `<dir>\` and
+  found nothing. Amped 2 lists a profile's folder with `FindFirstFile("U:\<profile>\*.*")` to sign its files into
+  `career.sig`: on Windows every profile was saved with an empty signature list and refused at load ("Unable to load").
+  Linux was not affected. Applies on top of 0001 (different file); generic, so SSX3-Recomp wants it too.

@@ -265,6 +265,14 @@ static void keyboard_merge(XBOX_INPUT_STATE *pState)
 
 static BOOL g_controller_connected[XBOX_MAX_CONTROLLERS];
 
+/* The Vulkan back end's SDL window pumps events on the main thread and says
+ * so here (see the SDL backend below). XInput polls without any window, so
+ * there is nothing to coordinate. */
+void xbox_InputSetMainPump(int on)
+{
+    (void)on;
+}
+
 void xbox_InputInit(void)
 {
     DWORD i;

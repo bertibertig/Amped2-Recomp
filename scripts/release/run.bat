@@ -19,7 +19,10 @@ if not defined RECOMP_AC97_READY set RECOMP_AC97_READY=1
 if not defined RECOMP_HEAP_RECLAIM set RECOMP_HEAP_RECLAIM=1
 if not defined RECOMP_FLIP_VSYNC set RECOMP_FLIP_VSYNC=1
 if not defined RECOMP_PB_EXEC set RECOMP_PB_EXEC=1
-if not defined RECOMP_FB_WINDOW set RECOMP_FB_WINDOW=1
+rem The renderer: Vulkan by default (its own window); AMPED2_RENDERER=cpu is the slow software renderer in the
+rem framebuffer window. amped2_recomp.exe applies the same defaults itself when started directly.
+if not defined AMPED2_RENDERER set AMPED2_RENDERER=vulkan
+if /i "%AMPED2_RENDERER%"=="cpu" (if not defined RECOMP_FB_WINDOW set RECOMP_FB_WINDOW=1) else (set RECOMP_FB_WINDOW=)
 if not defined RECOMP_USB set RECOMP_USB=1
 if not defined RECOMP_KEYBOARD set RECOMP_KEYBOARD=1
 if not defined AMPED2_SKIP_LOGOS set AMPED2_SKIP_LOGOS=1

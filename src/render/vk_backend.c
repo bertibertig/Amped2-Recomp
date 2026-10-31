@@ -44,9 +44,11 @@
 #include <SDL.h>
 #include <SDL_vulkan.h>
 
+#ifndef _WIN32
 #include <pthread.h>
 #include <sched.h>
 #include <sys/resource.h>
+#endif
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -2471,7 +2473,11 @@ static void frame_pace(void)
         if (left_us > 1500)
             SDL_Delay((Uint32)((left_us - 1000) / 1000));
         else
+#ifdef _WIN32
+            SDL_Delay(0);                   /* Sleep(0): give up the time slice */
+#else
             sched_yield();
+#endif
     }
 }
 
@@ -2644,15 +2650,40 @@ static int (*s_guest_main)(void);
 static int s_guest_rc;
 static Uint32 s_guest_done_event = (Uint32)-1;
 
-static void *guest_thread(void *unused)
+static void guest_run(void)
 {
     SDL_Event ev;
 
-    (void)unused;
     s_guest_rc = s_guest_main();
     memset(&ev, 0, sizeof ev);
     ev.type = s_guest_done_event;
     SDL_PushEvent(&ev);
+}
+
+#ifdef _WIN32
+static int SDLCALL guest_thread(void *unused)
+{
+    (void)unused;
+    guest_run();
+    return 0;
+}
+
+/* The guest's thread, generously sized since lifted code recurses on it (the
+ * same 64 MB floor as the POSIX rule below; Windows has no RLIMIT_STACK). */
+static int start_guest_thread(void)
+{
+    SDL_Thread *th = SDL_CreateThreadWithStackSize(guest_thread, "guest", 64u << 20, NULL);
+
+    if (!th)
+        return 0;
+    SDL_DetachThread(th);
+    return 1;
+}
+#else
+static void *guest_thread(void *unused)
+{
+    (void)unused;
+    guest_run();
     return NULL;
 }
 
@@ -2678,6 +2709,7 @@ static int start_guest_thread(void)
     pthread_detach(th);
     return 1;
 }
+#endif
 
 int amped2_vk_host_main(int (*guest_main)(void))
 {

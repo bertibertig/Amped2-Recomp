@@ -1,0 +1,17 @@
+diff --git a/src/kernel/kernel_file.c b/src/kernel/kernel_file.c
+index eb33a61..09f8cad 100644
+--- a/src/kernel/kernel_file.c
++++ b/src/kernel/kernel_file.c
+@@ -815,7 +815,11 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+         WCHAR* clean_path = dir_path;
+         if (wcsncmp(clean_path, L"\\\\?\\", 4) == 0)
+             clean_path += 4;
+-        if (FileName && FileName->Buffer) {
++        /* A zero-length FileName means "every entry", as on the POSIX side:
++         * XAPI's FindFirstFile passes "*.*" that way (Buffer kept, Length 0),
++         * and MultiByteToWideChar fails on a zero length, which left the
++         * search as "<dir>\" -- no entries at all. */
++        if (FileName && FileName->Buffer && FileName->Length > 0) {
+             WCHAR pattern_wide[MAX_PATH];
+             MultiByteToWideChar(CP_ACP, 0, FileName->Buffer, FileName->Length,
+                                 pattern_wide, MAX_PATH);

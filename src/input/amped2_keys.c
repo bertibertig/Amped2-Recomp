@@ -21,12 +21,16 @@
  * keyboard state, which SDL keeps for the focused window and clears when the
  * window loses the focus -- like the runtime's keys. On Windows (GDI window)
  * the runtime's key state holds the raw Win32 virtual-key codes, so they are
- * read from there. Only reached while RECOMP_KEYBOARD is on (host_pad.c).
+ * read from there. A Windows build with the Vulkan back end (AMPED2_SDL_KEYS)
+ * has an SDL window instead, whose glue maps only the runtime's own keys:
+ * there both are read, so the keys work in either window. Only reached while
+ * RECOMP_KEYBOARD is on (host_pad.c).
  */
 
 #include "xinput_xbox.h"
 #include "keyboard.h"
-#if !defined(_WIN32)
+#if !defined(_WIN32) || defined(AMPED2_SDL_KEYS)
+#define AMPED2_KEYS_SDL 1
 #include <SDL.h>
 #endif
 
@@ -36,7 +40,7 @@ static const struct {
     int kind;       /* XBOX_KEY_BUTTON or XBOX_KEY_ANALOG */
     int target;     /* wButtons bit or bAnalogButtons index */
 } s_keys[] = {
-#if !defined(_WIN32)
+#if defined(AMPED2_KEYS_SDL)
 #define SC(x) SDL_SCANCODE_##x
 #else
 #define SC(x) 0
@@ -54,17 +58,19 @@ static const struct {
  * is seen as an edge like any other key. */
 void game_keys_merge(XBOX_INPUT_STATE *kb)
 {
-#if !defined(_WIN32)
+#if defined(AMPED2_KEYS_SDL)
     int numkeys = 0;
     const Uint8 *down = SDL_GetKeyboardState(&numkeys);
 #endif
     size_t i;
 
     for (i = 0; i < sizeof s_keys / sizeof s_keys[0]; i++) {
-#if !defined(_WIN32)
-        int held = down && s_keys[i].scancode < numkeys && down[s_keys[i].scancode];
-#else
-        int held = xbox_FramebufferKeyDown(s_keys[i].vk);
+        int held = 0;
+#if defined(AMPED2_KEYS_SDL)
+        held = down && s_keys[i].scancode < numkeys && down[s_keys[i].scancode];
+#endif
+#if defined(_WIN32)
+        held = held || xbox_FramebufferKeyDown(s_keys[i].vk);
 #endif
         if (!held)
             continue;

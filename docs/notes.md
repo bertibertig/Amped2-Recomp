@@ -586,3 +586,22 @@ _(date – what was done, what was found, next step)_
   0x000223D0 – ~70 other callers pass `d:\Boom.xbe`, the fatal-error program. Only default.xbe is recompiled, so the
   window closed. `amped2_launch_xbe` (overrides.c wraps 0x000223D0) skips the cdx launch – the game ignores the result
   and stays on the title screen – and lets the others exit with a `[LAUNCH]` line. PAL: routine not located yet.
+- 2026-10-30 – **Windows with the Vulkan back end (Windows 11, RTX 4070 SUPER, llvm-mingw clang 22, native build).**
+  - Before: Windows had only the software renderer (2-6 fps). Now the Vulkan back end runs on Windows too: SDL2 2.32.10
+    as submodule `third_party/SDL` (static, no DLL), `glslc` from the Vulkan SDK (`VULKAN_SDK`), the runtime's
+    `keyboard_sdl.c` compiled in, the guest thread via `SDL_CreateThreadWithStackSize` (64 MB), `xbox_InputSetMainPump`
+    a no-op for XInput. `WinMain` applies run.bat's defaults itself (exe started directly, e.g. from a launcher) and makes
+    Vulkan the default renderer. Menus 60+ fps, rides ~40-85 fps at 4x / 21:9 unlocked (CPU-bound, texture hashing).
+    `use_venv` also finds a Windows venv (`Scripts/activate`). Crash reports print the offset into the exe (ASLR).
+  - Saves "Unable to load" on Windows: `career.sig` lists HMAC signatures of the profile's files, gathered with
+    `FindFirstFile("U:\<profile>\*.*")` (NTSC-U: game 0x0014F210 → XAPI 0x00250A09). XAPI passes `*.*` as a zero-length
+    pattern; the Win32 `NtQueryDirectoryFile` searched `<dir>\` and found nothing, so every profile was written with an
+    empty list. Runtime patch 0002. Same bug: the soundtrack list was empty (genre folders listed the same way).
+  - Music loud and distorted after a while: the dispatch lock's DPC gave up after 100 ms (`[IRQL] a DPC waited`) –
+    Windows preempts the raised thread under load. `RECOMP_DISPATCH_LOCK_MS=1000` default in `WinMain`: no warning and
+    no clamped sample in a 200 s run.
+  - Keyboard: Space/Escape/Tab (A/Start/Back) also from SDL's keyboard state on Windows (`AMPED2_SDL_KEYS`): the SDL
+    glue maps only letters, digits and a few named keys.
+  - Not reproduced: controller unresponsive after clicking out of the window (once); a `z:\image.res` sharing violation
+    that made the game launch its error program `Boom.xbe` (once); audio glitches after leaving a run (no host
+    underrun or lock warning logged).
