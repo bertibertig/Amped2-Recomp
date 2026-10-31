@@ -675,3 +675,13 @@ _(date – what was done, what was found, next step)_
   extension). It needs CodeView debug info: with clang on Windows, Debug/RelWithDebInfo builds add `-gcodeview` and
   `-Wl,--pdb=` (CMakeLists.txt, `AMPED2_PDB`), the generated code gets `-g0` to keep the PDB small. The toolchain's
   own lldb was no option: it fails to start without `libpython3.14.dll`.
+- 2026-10-31 – **PR preparation.** The branches were restacked into one linear series (ntsc-u → attract-mode →
+  windows-vulkan → textures-widescreen → native-widescreen → vscode-multiplatform). Fixes from the last review:
+  `run.sh` / `run.bat` / `run.ps1` no longer stop when `game_files/` is missing but `game_dir` (settings) or
+  `AMPED2_GAME_DIR` is set (tested with each launcher, `run.ps1` on PowerShell 7 and 5.1); `overlay_2d` uses
+  `flat_depth()`.
+  - Menu frame rate (Windows 11, RTX 4070 SUPER, 21:9, unlocked): the main menu with the rider preview (549 draws,
+    presented like a ride, ~3.4 GB of texture hashing per 5 s) runs ~61 fps at 2x and ~22 fps at 4x, so "laggy
+    menus" at 4x come from the resolution scale, not from a code change. The same CPU cost as in rides (texture
+    re-validation), plus something that grows with the resolution (render-target copies?) – part of the ride
+    performance work in docs/TODO.md.
