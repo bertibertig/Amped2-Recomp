@@ -49,6 +49,8 @@
 - [x] Dot-product modes + real cube maps in the Vulkan shader/back end (rider matches the CPU path)
 - [x] Rider upper body, gloves, head and hair: RunPushBuffer JUMPs followed, D3D's software-method patch done by the executor (matches xemu, 60 fps)
 - [ ] Software methods 0x08/0x09 (PGRAPH register writes from D3D's GPU interrupt handler) are logged, not modelled
+- [x] Boarder's face block noise after a ride (2026-10-30): texture offsets resolve to the contiguous window (runtime
+      patch 0003) – a heap page named for sound data shared the face texture's physical number
 - [x] Rider in a ride (Millicent 1) checked against xemu: complete (hair, hands, upper body), HUD and goals board shown
 - [x] Riding at ~55 fps: texture re-validation fixed, vertex ring grows, vertex programs on the GPU (`nv2a_vsh.vert`)
 - [ ] Rider shadow: D16 depth texture (format 0x30) as a shadow map – sample the depth surface with a compare sampler
@@ -114,6 +116,8 @@ First batch (done 2026-10-20, `amped2_recomp --settings` / `scripts/run.sh --set
 - [ ] Ride/menu detection for the aspect ratio is a heuristic (draws into an off-screen target = ride, in_ride() in
       vk_backend.c); a game-state flag would be exact. Splash screen at boot counts as a ride for ~30 flips
 - [ ] Hor+: objects the game culls against its 4:3 frustum may pop in at the far sides (not seen in Millicent 1)
+- [x] Widescreen: HUD elements the game parks off screen (a camera counter past x 640) stay hidden – 2D overlays are
+      clipped to the 4:3 middle in rides; full-screen fades cover the whole width
 - [ ] Alt+Enter / F11 toggle not exercised by a test yet (needs window focus)
 
 Backlog (chosen 2026-10-20):

@@ -79,5 +79,14 @@ available as the reference (`AMPED2_RENDERER=cpu`) for comparison dumps; the Vul
 - Checking presented frames without a screen: the Mesa screenshot layer,
   `VK_INSTANCE_LAYERS=VK_LAYER_MESA_screenshot VK_LAYER_MESA_SCREENSHOT_CONFIG="frames=200-6-150,output_dir=<dir>"`
   (PNG per frame, overlay included – `AMPED2_VK_DUMP` dumps the guest surface only).
+- **Widescreen 2D**: a 2D overlay (depth test off, one constant depth: HUD, GUI) is clipped to the un-widened middle
+  in rides (`overlay_2d`, `set_scissor`; `AMPED2_VK_HUD_CLIP=0` turns the clip off) – the game parks hidden HUD
+  elements off screen. Vertex-program overlays are declined to the CPU transform so their positions are known. A
+  single untextured quad covering the whole guest screen in a ride (a fade, a flash) is drawn edge to edge, its edges
+  pushed past the surface (`covers_guest_screen`).
+- **Render-to-texture lookup** needs the surface's size and an uncompressed format, not only the address (surfaces
+  outlive their use and memory is reused).
+- Diagnostics: `AMPED2_VK_TEXDUMP=<prefix>` writes decoded textures as BMP, `AMPED2_VK_FADELOG=1` logs batches that
+  span most of the screen.
 - Not yet: colour-keyed overlays in the Vulkan path (the CPU window honours the key); validation layers are not
   installed on this machine (`vulkan-validation-layers`).
