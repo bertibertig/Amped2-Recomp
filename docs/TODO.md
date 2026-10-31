@@ -18,6 +18,10 @@
 - [ ] Check the real unimplemented instructions (cpuid in sub_0026A2F0, cli/sti, pushfd/popfd in XNET) – see notes
 - [ ] Find out what `Boom.xbe` is and whether default.xbe launches it (XLaunchNewImage)
 - [x] First start, seeds, KEVENTs, fence/vblank, DirectSound/AC'97, heap reclaim
+- [x] NTSC-U disc next to PAL (2026-10-30): per-version addresses and seeds (`src/version/<build>/`,
+      `config/<build>/`), chosen by the XBE's SHA-1; the program refuses the other version's default.xbe
+- [ ] PAL equivalents of the NTSC-U-only work (attract-mode launch routine, the camera aspect hook for native HD)
+- [ ] PAL build timestamp in `src/version/pal/amped2_addrs.h` is taken from docs/notes.md, not checked against a PAL XBE
 - [x] NV2A video overlay (movies) in the runtime + SDL window
 - [x] Movies play at full speed (DPC latency fixed in the runtime)
 - [x] **Music bug** (user report, 2026-10-20): music stopped, came back quiet/crackling, no next track, static, crash –

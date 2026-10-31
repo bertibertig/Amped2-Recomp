@@ -18,8 +18,11 @@ xboxrecomp/        Git submodule (sp00nznet/xboxrecomp v0.14.0, the same commit 
                    runtime changes live in patches/xboxrecomp/ and are applied by the scripts.
 patches/xboxrecomp/  Runtime patch taken over from SSX3-Recomp (Linux MMIO decoder, case-insensitive paths, vblank,
                    pushbuffer executor fixes, Vulkan back-end interface) – game-agnostic.
-config/            Our own config, e.g. seed_functions.json (entry points the static analysis does not see) – created
-                   during bring-up, the pipeline picks it up automatically once it exists
+config/<build>/    Per disc version (pal, ntsc_u): seed_functions.json (entry points the static analysis does not
+                   see); run_pipeline.sh picks the build by the XBE's SHA-1 (scripts/_common.sh xbe_version)
+src/version/<build>/ Per disc version: overrides.c (the hand-written sub_XXXXXXXX definitions, scanned by
+                   --exclude-manual) and amped2_addrs.h (data addresses, entry point, build timestamp); the bodies
+                   stay in src/recomp_manual.c, address-free
 game_files/        Extracted copy of your own disc (gitignored): default.xbe + data
 reference/         Local read-only copies (gitignored): SSX3-Recomp (ours), SSX3-recomp-koen, SSX-Tricky-PC, OpenTricky
 scripts/           setup.sh, extract_iso.sh, run_pipeline.sh, doctor.sh, ghidra.sh (+ ghidra/), fetch_references.sh
@@ -27,9 +30,9 @@ src/recomp/gen/    GENERATED code (gitignored, from your own XBE) – never comm
 docs/notes.md      Running work log (addresses, findings, decisions) – keep adding to it
 docs/TODO.md       Plan / open items
 ```
-Not there yet (comes after `parse`, see docs/TODO.md): `src/main.c`, `src/recomp_manual.c`, `CMakeLists.txt`,
-`scripts/build.sh`/`run.sh`, `src/render/` (Vulkan), `src/input/`. They will be ported from `reference/SSX3-Recomp`
-(our own code) with the SSX3-specific parts (addresses, boot-video flags, `SSX3_*` switches) taken out.
+Host and build (ported from `reference/SSX3-Recomp`): `src/main.c`, `src/recomp_manual.c`, `CMakeLists.txt`,
+`scripts/build.sh`/`run.sh`, `src/render/` (Vulkan), `src/input/`, `src/settings/`. A new disc version needs its own
+`src/version/<build>/` and `config/<build>/` and an entry in `xbe_version` – addresses never carry over unchecked.
 
 ## Workflow (keep this order)
 1. `scripts/setup.sh` – venv + capstone; Linux build deps: `bash xboxrecomp/tools/linux/install_deps.sh` (sudo)
@@ -40,7 +43,7 @@ Not there yet (comes after `parse`, see docs/TODO.md): `src/main.c`, `src/recomp
 4. `scripts/run_pipeline.sh` (everything) – disasm → names → func_id → **abi_analysis (never skip!)** → recomp (`--split 250`).
 5. `scripts/doctor.sh` – what is still unresolved (unresolved call targets, stubs, unimplemented instructions).
 6. Port host/build from SSX3-Recomp, build → the first start **will crash**. That is normal: read stderr, evaluate the
-   ICALL trace, add seeds (`tools.seed_from_log` → `config/seed_functions.json`) and overrides, then repeat.
+   ICALL trace, add seeds (`tools.seed_from_log` → `config/<build>/seed_functions.json`) and overrides, then repeat.
 Guides: `xboxrecomp/docs/GETTING_STARTED.md`, `xboxrecomp/docs/pipeline/06-debugging.md`,
 `xboxrecomp/docs/technical/indirect-calls.md`, `xboxrecomp/docs/technical/pushbuffer-executor.md`, `lessons-learned.md`.
 

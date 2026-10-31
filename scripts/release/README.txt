@@ -14,9 +14,14 @@ Unofficial fan project, not affiliated with or endorsed by Microsoft.
 -------------------------
 
 This package contains NO game data. You need a legally obtained Amped 2 disc for
-the original Xbox, PAL/EU version (title ID 4D530041; default.xbe SHA-1
-38e63cd016bf084d999e0a911933a52191bfc378). Other versions (NTSC-U, NTSC-J) are
-not tested and most likely do not work.
+the original Xbox (title ID 4D530041), in the version this package is built for:
+
+  PAL / Europe            default.xbe SHA-1 38e63cd016bf084d999e0a911933a52191bfc378
+  NTSC-U / North America  default.xbe SHA-1 5f432b86775b7b334212a3bc09d2063f670865b7
+
+Each package is built for one of them (see its name); with the other disc's
+files it stops with a message naming the version it needs. NTSC-J is not
+supported.
 
 a) Make a disc image (.iso) of your disc, e.g. on a modded Xbox or with an
    Xbox-compatible DVD drive. A full disc image (Redump style) and a
