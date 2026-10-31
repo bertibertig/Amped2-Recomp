@@ -20,6 +20,7 @@ It follows the same route as SSX3-Recomp (our SSX 3 port with the same toolkit):
 | Repo, toolkit (xboxrecomp v0.14.0 + our runtime patch), scripts | ✅ |
 | Game data in `game_files/` (PAL or NTSC-U, title ID 0x4D530041, XDK 5558) | ✅ |
 | NTSC-U (North America) disc next to PAL: per-version addresses and seeds; the program refuses the other disc version with a message | ✅ |
+| Title screen left idle: the attract mode's hand-off to the disc's video launcher is skipped instead of closing the game (NTSC-U) | ✅ |
 | Pipeline: 14,365 functions lifted, 0 translation errors, 1.96 M lines of C | ✅ |
 | Host and input ported from SSX3-Recomp, Linux build (CPU renderer, multi-threaded) | ✅ |
 | Boot: XAPI (media check bypassed), D3D, XACT/WMA audio, XNet offline, splash screen | ✅ |
