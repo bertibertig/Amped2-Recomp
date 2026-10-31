@@ -86,7 +86,6 @@ available as the reference (`AMPED2_RENDERER=cpu`) for comparison dumps; the Vul
   pushed past the surface (`covers_guest_screen`).
 - **Render-to-texture lookup** needs the surface's size and an uncompressed format, not only the address (surfaces
   outlive their use and memory is reused).
-- Diagnostics: `AMPED2_VK_TEXDUMP=<prefix>` writes decoded textures as BMP, `AMPED2_VK_FADELOG=1` logs batches that
-  span most of the screen.
+- Diagnostics: `AMPED2_VK_TEXDUMP=<prefix>` writes decoded textures as BMP.
 - Not yet: colour-keyed overlays in the Vulkan path (the CPU window honours the key); validation layers are not
   installed on this machine (`vulkan-validation-layers`).

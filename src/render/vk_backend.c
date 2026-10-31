@@ -2227,9 +2227,23 @@ static void draw_frag_state(const Nv2aBatch *b, VkbDrawCtx *c)
                 | (rs->alpha_test_enable ? 0x80000000u : 0u);
 }
 
+/* Whether every vertex of the batch has the same depth (rhw): a flat quad or
+ * a 2D overlay, not the world. */
+static int flat_depth(const Nv2aBatch *b)
+{
+    float r0 = 1e9f, r1 = -1e9f;
+    uint32_t i;
+
+    for (i = 0; i < b->count; i++) {
+        if (b->vertices[i].rhw < r0) r0 = b->vertices[i].rhw;
+        if (b->vertices[i].rhw > r1) r1 = b->vertices[i].rhw;
+    }
+    return b->count && r1 - r0 <= 1e-5f * r1;
+}
+
 /* A single flat quad that covers the whole guest screen: a fade, a flash, a
- * full-screen tint. On a widened surface the HUD stays 4:3 in the middle,
- * but these should reach the edges, or a fade to black leaves the sides lit.
+ * full-screen tint. On a widened surface the HUD stays in the middle, but
+ * these should reach the edges, or a fade to black leaves the sides lit.
  * Amped 2 draws its fades with a vertex program: one quad (6 vertices) at a
  * constant depth (rhw 0.002), exactly 640x480 or zoomed past the edges during
  * the transition. Larger or deeper-varying geometry -- the world -- keeps its
@@ -2243,37 +2257,17 @@ static int covers_guest_screen(const Nv2aBatch *b, const VkbSurface *s)
 {
     float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
     uint32_t i;
-    static int log = -1;
-    float r0 = 1e9f, r1 = -1e9f;
-    int covers;
 
-    if (log < 0)
-        log = getenv("AMPED2_VK_FADELOG") != NULL;
-    if (b->count > 6 && !log)
+    if (b->count > 6 || !flat_depth(b))
         return 0;
     for (i = 0; i < b->count; i++) {
         const Nv2aVertex *v = &b->vertices[i];
-        if (v->rhw < r0) r0 = v->rhw;
-        if (v->rhw > r1) r1 = v->rhw;
         if (v->x < x0) x0 = v->x;
         if (v->x > x1) x1 = v->x;
         if (v->y < y0) y0 = v->y;
         if (v->y > y1) y1 = v->y;
     }
-    covers = b->count <= 6 && r1 - r0 <= 1e-5f * r1
-          && x0 <= 2.0f && y0 <= 2.0f
-          && x1 >= (float)s->gw - 2.0f && y1 >= (float)s->gh - 2.0f;
-    /* AMPED2_VK_FADELOG=1: every batch spanning most of the screen. */
-    if (log && x1 - x0 >= 0.9f * (float)s->gw && y1 - y0 >= 0.9f * (float)s->gh) {
-        static int n;
-        if (n++ < 400)
-            fprintf(stderr, "  [FADE] flip %u surf %08X %ux%u%s: %u verts ext=%d rhw %.3f..%.3f "
-                    "x %.1f..%.1f y %.1f..%.1f diffuse0 %08X -> %s\n", V.flips, s->va, s->gw,
-                    s->gh, s->wide ? " wide" : "", b->count, b->ext != NULL, r0, r1, x0, x1,
-                    y0, y1, b->count ? b->vertices[0].diffuse : 0,
-                    covers && s->wide && in_ride() ? "stretched" : "kept");
-    }
-    return covers;
+    return x0 <= 2.0f && y0 <= 2.0f && x1 >= (float)s->gw - 2.0f && y1 >= (float)s->gh - 2.0f;
 }
 
 /* A 2D overlay: depth test off and every vertex at the same depth -- the HUD
