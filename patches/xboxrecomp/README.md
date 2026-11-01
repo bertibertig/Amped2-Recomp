@@ -141,6 +141,12 @@ Verified: Linux build + Windows cross build (MinGW) compile; own decoder test (8
   found nothing. Amped 2 lists a profile's folder with `FindFirstFile("U:\<profile>\*.*")` to sign its files into
   `career.sig`: on Windows every profile was saved with an empty signature list and refused at load ("Unable to load").
   Linux was not affected. Applies on top of 0001 (different file); generic, so SSX3-Recomp wants it too.
+- Same function: a finished search stays finished. At the end of a listing the search context was freed, so the
+  next query on the same handle (without RestartScan) started a new search from the first entry. Creating a boarder
+  then listed the existing profile folders twice: duplicates, and deleting one damaged the other. Now the context is
+  kept as "done" (`find_handle` = `INVALID_HANDLE_VALUE`) and answers `STATUS_NO_MORE_FILES` until the handle is
+  closed (`xbox_dir_context_drop`) or rescanned. User-tested on Windows; the POSIX implementation is not checked for
+  the same gap yet.
 
 ## 0003 – Texture offsets resolve to the contiguous window
 - `src/kernel/nv2a_pb_exec.c`: new `dma_resolve_texture` for `SET_TEXTURE_OFFSET` and `SET_TEXTURE_PALETTE`: an

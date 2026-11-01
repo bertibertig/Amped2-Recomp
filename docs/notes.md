@@ -685,3 +685,9 @@ _(date – what was done, what was found, next step)_
     menus" at 4x come from the resolution scale, not from a code change. The same CPU cost as in rides (texture
     re-validation), plus something that grows with the resolution (render-target copies?) – part of the ride
     performance work in docs/TODO.md.
+- 2026-10-31 – **Profiles: duplicates when creating a boarder (Windows).** Creating a new boarder showed the existing
+  ones twice, and deleting one damaged the other (user report). The Win32 `xbox_NtQueryDirectoryFile` freed its
+  search context when a listing ended, so a further query on the same directory handle started over from the first
+  entry instead of answering "no more files". A finished search now stays finished until the handle is closed or
+  rescanned (runtime patch 0002, second part). User-tested: a new boarder appears once, deleting works. Saves were
+  backed up first. The POSIX implementation is not checked for the same gap yet.

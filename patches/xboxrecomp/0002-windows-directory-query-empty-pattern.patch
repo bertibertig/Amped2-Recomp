@@ -1,8 +1,23 @@
 diff --git a/src/kernel/kernel_file.c b/src/kernel/kernel_file.c
-index eb33a61..09f8cad 100644
+index eb33a61..be0e5f5 100644
 --- a/src/kernel/kernel_file.c
 +++ b/src/kernel/kernel_file.c
-@@ -815,7 +815,11 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+@@ -799,6 +799,14 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+     if (!ctx)
+         return STATUS_INSUFFICIENT_RESOURCES;
+ 
++    /* A finished search stays finished: the next query on the handle answers
++     * "no more files" until it is closed or rescanned, as on the Xbox. Freeing
++     * it at the end let the next query start a new search from the first
++     * entry -- a title listing its save folders saw every profile twice. */
++    if (!RestartScan && ctx->first_done && ctx->find_handle == INVALID_HANDLE_VALUE) {
++        IoStatusBlock->Status = STATUS_NO_MORE_FILES;
++        return STATUS_NO_MORE_FILES;
++    }
+     if (RestartScan || !ctx->first_done) {
+         if (ctx->find_handle && ctx->find_handle != INVALID_HANDLE_VALUE) {
+             FindClose(ctx->find_handle);
+@@ -815,7 +823,11 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
          WCHAR* clean_path = dir_path;
          if (wcsncmp(clean_path, L"\\\\?\\", 4) == 0)
              clean_path += 4;
@@ -15,3 +30,34 @@ index eb33a61..09f8cad 100644
              WCHAR pattern_wide[MAX_PATH];
              MultiByteToWideChar(CP_ACP, 0, FileName->Buffer, FileName->Length,
                                  pattern_wide, MAX_PATH);
+@@ -824,9 +836,9 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+         } else {
+             swprintf_s(search_path, MAX_PATH, L"%s\\*", clean_path);
+         }
++        ctx->first_done = TRUE;
+         ctx->find_handle = FindFirstFileW(search_path, &ctx->find_data);
+         if (ctx->find_handle == INVALID_HANDLE_VALUE) {
+-            ctx->find_handle = NULL;
+             IoStatusBlock->Status = STATUS_NO_MORE_FILES;
+             return STATUS_NO_MORE_FILES;
+         }
+@@ -834,8 +846,7 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+     } else {
+         if (!FindNextFileW(ctx->find_handle, &ctx->find_data)) {
+             FindClose(ctx->find_handle);
+-            ctx->find_handle = NULL;
+-            ctx->file_handle = NULL;
++            ctx->find_handle = INVALID_HANDLE_VALUE;  /* finished, see above */
+             IoStatusBlock->Status = STATUS_NO_MORE_FILES;
+             return STATUS_NO_MORE_FILES;
+         }
+@@ -846,8 +857,7 @@ NTSTATUS __stdcall xbox_NtQueryDirectoryFile(
+            !wcscmp(ctx->find_data.cFileName, L"..")) {
+         if (!FindNextFileW(ctx->find_handle, &ctx->find_data)) {
+             FindClose(ctx->find_handle);
+-            ctx->find_handle = NULL;
+-            ctx->file_handle = NULL;
++            ctx->find_handle = INVALID_HANDLE_VALUE;  /* finished, see above */
+             IoStatusBlock->Status = STATUS_NO_MORE_FILES;
+             return STATUS_NO_MORE_FILES;
+         }
