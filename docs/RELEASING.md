@@ -65,15 +65,23 @@ Choose a Look → main menu → Career → Millicent 1 → challenge card → go
 Pass criteria: missing-files message; still running at the time limit (no crash); frames show the menus and **a
 ride** with rider and HUD; fps lines near 55-60. Do not publish a build that does not reach a ride.
 
-## Test (Windows under Wine and Proton, by hand for now)
+## Test (Windows, by hand for now)
 
-Unpack the zip into `logs/release-test-<version>-win/pkg`, link the disc files into its `game_files/`, then start
-`run.bat` with an own prefix – `wine cmd /c Z:\…\run.bat` (`WINEPREFIX=…`) and
-`umu-run cmd.exe /c Z:\…\run.bat` (`PROTONPATH=GE-Proton`, own `WINEPREFIX`). Pass
-`RECOMP_PAD_LIVE=Z:\…\pad_live.txt` and `RECOMP_FB_DUMP=Z:\…\dumps\w RECOMP_FB_WINDOW_DUMP_EVERY=120`, append
-presses to the pad file (hold them: `start:800`, `a:800` – the game polls at ~5 fps) and look at the dumps. Movies
-are not in the dumps (video overlay). v0.1.0 state: boot, new profile saved, menus and a ride on Millicent 1 at
-~2-6 fps, black movies, no music, stray triangles. A crash or a run that no longer reaches a ride is a regression.
+**Native Windows 10/11 first** – the package's default renderer is Vulkan (needs a current GPU driver). Unpack the
+zip into a fresh folder, put the disc files into its `game_files/` (or set `game_dir` in `settings.ini`), and start
+`run.bat`, once also `run.ps1` (right-click → *Run with PowerShell*) and once the exe by double-click. Play the
+default flow: intro and legal screen skipped with Start → title → main menu → Career → Millicent 1 → a ride; create
+a boarder, quit, start again and load it (no duplicate boarders, deleting one leaves the others intact); the
+soundtrack list shows songs and the music plays normally. `run.log` next to the exe has a `[VK] FPS` line every
+5 s: menus and rides near 60 fps at the original frame rate, unlocked well above it (README, Status). A crash, a run
+that no longer reaches a ride, a boarder that does not load, or missing or distorted music is a regression.
+
+**Wine / Proton (optional, from Linux):** unpack the zip into `logs/release-test-<version>-win/pkg`, link the disc
+files into its `game_files/`, then start `run.bat` with an own prefix – `wine cmd /c Z:\…\run.bat`
+(`WINEPREFIX=…`) and `umu-run cmd.exe /c Z:\…\run.bat` (`PROTONPATH=GE-Proton`, own `WINEPREFIX`); pass
+`RECOMP_PAD_LIVE=Z:\…\pad_live.txt` and append presses to the pad file (hold them: `start:800`, `a:800`). Not
+tested with the Vulkan renderer yet; v0.1.0 (software renderer) reached a ride at ~2-6 fps with black movies and no
+music.
 
 ## Work log
 Add a `docs/notes.md` entry (date, version, test results) before the release commit.
